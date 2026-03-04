@@ -1,0 +1,63 @@
+frontend/
+*.duckdb
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
+.DS_Store
+node_modules/
+
+# Secrets and sensitive files
+.env
+.env.*
+!.env.example
+secrets.toml
+*.toml
+
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+pipeline_*.log
+
+# Database files
+*.duckdb
+*.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Eko app export (pushed to EKO-FITNESS repo separately)
+EKO-FITNESS-app/
+
+# Secrets / credentials (never commit)
+CREDENTIALS.json
+**/CREDENTIALS.json
+
+# Large DB / MotherDuck artifacts (do not commit)
+md:my_CIL_DB
+**/md:*

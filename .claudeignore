@@ -1,0 +1,37 @@
+# Claude Code ignore file
+# Files and directories to exclude from Claude's analysis
+
+# Virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Database files (too large)
+*.duckdb
+*.db
+
+# Excel and CSV files (unless needed)
+*.xlsx
+*.csv
+~$*.xlsx
+
+# Logs
+*.log
+
+# Temporary files
+.DS_Store
+*.swp
+*.swo
+
+# Git
+.git/
+
+# Documentation that's not code
+*.md
+!README.md
+
+# Backup files
+*_backup_*
+*backup*
+

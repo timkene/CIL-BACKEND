@@ -1,0 +1,36 @@
+======================================================================
+UNKNOWN HOSPITALS - PROVIDER IDS
+======================================================================
+
+ARIK AIR - Unknown Hospital:
+Provider ID: 22164
+Total Claims in 2025: 115
+Total Cost: ₦22,804,986
+Date Range: Jan 2025 - Oct 2025
+
+NAHCO - Unknown Hospitals:
+1. Provider ID: 22154
+   Total Claims in 2025: 118
+   Total Cost: ₦7,151,474
+   Date Range: May 2025 - Oct 2025
+
+2. Provider ID: 5770
+   Total Claims in 2025: 3,215
+   Total Cost: ₦43,849,294
+   Date Range: July 2023 - Oct 2025 (spans multiple years)
+
+3. Provider ID: 21483
+   Total Claims in 2025: 4,509
+   Total Cost: ₦37,841,897
+   Date Range: Nov 2024 - Sep 2025
+
+======================================================================
+SOLUTION:
+These provider IDs exist in CLAIMS DATA but not in PROVIDERS table.
+They may be newer providers not yet imported, or there was an import error.
+
+To get the actual names:
+1. Connect to Medicloud database directly
+2. Query: SELECT * FROM Providers WHERE ProviderTIN IN (22164, 22154, 5770, 21483)
+3. Or check with your database administrator to verify these provider IDs
+======================================================================
