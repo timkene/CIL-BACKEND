@@ -49,14 +49,12 @@ def get_db_connection(read_only=True):
         if thread_id in _connection_pool:
             conn = _connection_pool[thread_id]
             idle = now - _last_active.get(thread_id, 0)
-            # For local DuckDB we always run a cheap health-check (no network).
-            # For MotherDuck we only ping after long idle to avoid extra round-trips.
-            need_health_check = USE_LOCAL_DB or idle >= _IDLE_CHECK_SECS
+            # For MotherDuck always verify: cloud connections can be closed by server after idle (e.g. on Render).
+            # For local DuckDB only ping after long idle.
+            need_health_check = (not USE_LOCAL_DB) or idle >= _IDLE_CHECK_SECS
             if not need_health_check:
-                # Connection recently used — skip health-check, return immediately
                 _last_active[thread_id] = now
                 return conn
-            # Verify still alive before returning
             try:
                 conn.execute("SELECT 1")
                 _last_active[thread_id] = now
