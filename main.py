@@ -28,8 +28,18 @@ import uvicorn
 import asyncio
 from datetime import datetime, date
 
-# Import routers
-from api.routes import mlr, utilization, health, enrollees, clients, finance, paclaims, admin, providers, tariff, banding
+# Import routers (tariff pulls in Streamlit — skip on Render to avoid OOM)
+from api.routes import mlr, utilization, health, enrollees, clients, finance, paclaims, admin, providers, banding
+# Skip tariff on Render: RENDER is set by Render; avoid importing Streamlit-heavy modules (saves 512MB+)
+_RENDER_DEPLOY = (
+    os.getenv("RENDER", "").lower() in ("true", "1", "yes")
+    or bool(os.getenv("RENDER_SERVICE_NAME"))
+    or bool(os.getenv("RENDER_EXTERNAL_URL"))
+)
+if not _RENDER_DEPLOY:
+    from api.routes import tariff
+else:
+    tariff = None  # type: ignore
 from core.database import get_db_connection, close_all_connections, get_database_info, USE_LOCAL_DB
 
 # Background task for cache warming
@@ -163,7 +173,8 @@ app.include_router(finance.router, prefix="/api/v1/finance", tags=["Finance"])
 app.include_router(paclaims.router, prefix="/api/v1/pa-claims", tags=["PA & Claims"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 app.include_router(providers.router, prefix="/api/v1/providers", tags=["Providers"])
-app.include_router(tariff.router, prefix="/api/v1/tariff", tags=["Tariff"])
+if tariff is not None:
+    app.include_router(tariff.router, prefix="/api/v1/tariff", tags=["Tariff"])
 app.include_router(banding.router, prefix="/api/v1/banding", tags=["Hospital Band Analysis"])
 
 # Root endpoint
