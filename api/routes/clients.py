@@ -262,17 +262,21 @@ async def get_client_dashboard_quick(
 @router.get("/dashboard")
 async def get_client_dashboard(
     limit: int = Query(20, ge=1, le=100),
-    user_id: Optional[int] = Query(None, description="User ID for filtering allocated clients")
-    ):
+    user_id: Optional[int] = Query(None, description="User ID for filtering allocated clients"),
+    quick: bool = Query(False, description="If true, return lightweight list only (avoids 502 on slow hosts like Render)"),
+):
     """
     Client analytics landing data:
     1. Top clients by total medical cost (claims + unclaimed PA)
     2. Top clients by number of active members
     If user_id is provided, only returns clients allocated to that user.
+    Use ?quick=1 for a fast response when the full computation times out (e.g. on Render).
 
     Internally this uses calculate_client_summary_basic(), which is the same
     core summary that a future nightly batch job can write into a summary table.
     """
+    if quick:
+        return await get_client_dashboard_quick(limit=limit, user_id=user_id)
     # Run heavy summary computation with a timeout so we respond before Render's proxy (often 30s on free tier).
     # If we don't, the proxy returns 502 and no error is logged in the app.
     _DASHBOARD_TIMEOUT = 25.0  # seconds
