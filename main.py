@@ -99,23 +99,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️ Database connection warmup failed: {e}")
 
-    # 2. Pre-load caches (initial data load)
-    try:
-        print("📦 Pre-loading data caches...")
-        mlr.load_mlr_data()
-        print("  ✅ MLR data cached")
-    except Exception as e:
-        print(f"  ⚠️ MLR cache pre-load failed: {e}")
-
-    try:
-        enrollees.load_enrollee_data()
-        print("  ✅ Enrollee data cached")
-    except Exception as e:
-        print(f"  ⚠️ Enrollee cache pre-load failed: {e}")
-
-    # 3. Start background cache warming task
-    _cache_warming_task = asyncio.create_task(warm_caches_background())
-    print("🔄 Background cache warming task started")
+    # 2. Pre-load caches (skip on Render to stay under 512MB; data loads on first request)
+    if not _RENDER_DEPLOY:
+        try:
+            print("📦 Pre-loading data caches...")
+            mlr.load_mlr_data()
+            print("  ✅ MLR data cached")
+        except Exception as e:
+            print(f"  ⚠️ MLR cache pre-load failed: {e}")
+        try:
+            enrollees.load_enrollee_data()
+            print("  ✅ Enrollee data cached")
+        except Exception as e:
+            print(f"  ⚠️ Enrollee cache pre-load failed: {e}")
+        _cache_warming_task = asyncio.create_task(warm_caches_background())
+        print("🔄 Background cache warming task started")
+    else:
+        print("📦 Render: skipping pre-load and cache warming (data loads on first request)")
 
     print("✅ API startup complete!")
 
