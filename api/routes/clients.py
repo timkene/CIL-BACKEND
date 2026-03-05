@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from datetime import datetime
 from typing import Optional
+import asyncio
 import logging
 import polars as pl
 import pandas as pd
@@ -200,6 +201,64 @@ def calculate_client_summary_basic() -> pl.DataFrame:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/dashboard/quick")
+async def get_client_dashboard_quick(
+    limit: int = Query(20, ge=1, le=100),
+    user_id: Optional[int] = Query(None, description="User ID for filtering allocated clients"),
+):
+    """
+    Lightweight client list for fast response (e.g. when full dashboard times out on Render).
+    Returns same JSON shape as /dashboard but with placeholder zeros; no heavy cost/member computation.
+    """
+    try:
+        conn = get_db_connection()
+        rows = conn.execute(
+            """
+            SELECT gc.groupname
+            FROM "AI DRIVEN DATA"."GROUP_CONTRACT" gc
+            WHERE gc.iscurrent = 1
+            ORDER BY gc.groupname
+            LIMIT ?
+            """,
+            [min(limit * 3, 500)],  # fetch a bit more in case we filter by allocation
+        ).fetchdf()
+    except Exception as e:
+        logger.warning(f"Dashboard quick query failed: {e}")
+        rows = pd.DataFrame({"groupname": []})
+
+    names = rows["groupname"].tolist() if not rows.empty else []
+    allocated = get_user_allocated_clients(user_id)
+    if allocated is not None:
+        if not allocated:
+            names = []
+        else:
+            names = [n for n in names if n in allocated][:limit]
+    else:
+        names = names[:limit]
+    placeholder = [
+        {
+            "groupname": n,
+            "claims_cost": 0,
+            "unclaimed_pa_cost": 0,
+            "total_cost": 0,
+            "visit_count": 0,
+            "unique_enrollees": 0,
+            "active_members": 0,
+        }
+        for n in names
+    ]
+    return {
+        "success": True,
+        "dashboard": {
+            "top_by_cost": placeholder,
+            "top_by_active_members": placeholder,
+        },
+        "filters": {"limit": limit},
+        "timestamp": datetime.now().isoformat(),
+        "quick": True,
+    }
+
+
 @router.get("/dashboard")
 async def get_client_dashboard(
     limit: int = Query(20, ge=1, le=100),
@@ -214,10 +273,27 @@ async def get_client_dashboard(
     Internally this uses calculate_client_summary_basic(), which is the same
     core summary that a future nightly batch job can write into a summary table.
     """
-    try:
-        # Compute per-client summary once
-        summary_df = calculate_client_summary_basic()
+    # Run heavy summary computation with a timeout so we respond before Render's proxy (often 30s on free tier).
+    # If we don't, the proxy returns 502 and no error is logged in the app.
+    _DASHBOARD_TIMEOUT = 25.0  # seconds
 
+    try:
+        loop = asyncio.get_event_loop()
+        summary_df = await asyncio.wait_for(
+            loop.run_in_executor(None, calculate_client_summary_basic),
+            timeout=_DASHBOARD_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Client dashboard request timed out after %.0fs (proxy may return 502 if we don't respond in time).",
+            _DASHBOARD_TIMEOUT,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Dashboard request took too long. Please try again or use a smaller limit.",
+        )
+
+    try:
         # Get user's allocated clients
         allocated_clients = get_user_allocated_clients(user_id)
 
