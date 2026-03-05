@@ -22,7 +22,7 @@ os.environ["USE_SHARED_DB_CONNECTION"] = "1"
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from contextlib import asynccontextmanager
 import uvicorn
 import asyncio
@@ -189,6 +189,12 @@ async def root():
         "docs": "/docs",
         "health": "/api/v1/health"
     }
+
+
+@app.head("/")
+async def root_head():
+    """HEAD / for Render (and other) health checks — returns 200 with no body."""
+    return Response(status_code=200)
 
 # Global error handler
 @app.exception_handler(Exception)
