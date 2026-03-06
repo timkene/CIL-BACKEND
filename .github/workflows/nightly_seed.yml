@@ -1,0 +1,32 @@
+name: Nightly MLR Seed
+
+on:
+  schedule:
+    # 1:00 AM UTC = 2:00 AM WAT (West Africa Time)
+    - cron: '0 1 * * *'
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install duckdb supabase python-dateutil python-dotenv
+
+      - name: Run MLR seed
+        env:
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          SUPABASE_URL:     ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:     ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/seed_mlr_to_supabase.py
