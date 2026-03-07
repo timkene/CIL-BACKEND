@@ -1264,7 +1264,7 @@ def generate_pdf(data: RenewalData, narratives: dict) -> bytes:
             ["Plan Adequacy (PMPM)", f"Actuarial premium: {N(data.actuarial_premium)} vs {N(main_prem)} current",
              "\U0001f7e2 ADEQUATE" if main_prem >= data.actuarial_premium else "\U0001f7e1 REVIEW",
              "PMPM-based renewal pricing"],
-            ["Limit Risk", f"Limit:premium ratio {data.plans[0].get('ratio',0):.1f}x (market: 10\u201325x)",
+            ["Limit Risk", f"Limit:premium ratio {data.plans[0].get('ratio',0):.1f}x (market: 10\u201325x)" if data.plans else "No plan data available",
              "\U0001f7e1 HIGH END" if data.plans and data.plans[0].get("ratio",0) > 20 else "\U0001f7e2 OK",
              "Add surgical sub-limit at renewal"],
             ["Provider Risk", f"{top_prov_name} = {P(top_prov_pct2)} of PA",

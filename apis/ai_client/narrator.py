@@ -134,7 +134,7 @@ def generate_premium_recommendation(data: RenewalData) -> dict:
 Generate a renewal premium recommendation for {data.group_name}.
 
 FINANCIAL DATA:
-- Current premium (main plan): ₦{data.plans[0]['premium']:,.0f}/head if available
+- Current premium (main plan): {f"₦{data.plans[0]['premium']:,.0f}/head" if data.plans else "N/A (no plan data)"}
 - Plans: {plans_str}
 - Historical PMPM: ₦{data.prev_pmpm:,.0f}/member/month (previous contract)
 - Current PMPM: ₦{data.curr_pmpm:,.0f}/member/month (YTD, may be inflated by acute events)
