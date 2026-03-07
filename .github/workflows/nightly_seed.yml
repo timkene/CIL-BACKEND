@@ -2,7 +2,7 @@ name: Nightly MLR Seed
 
 on:
   schedule:
-    # 1:00 AM UTC = 2:00 AM WAT (West Africa Time)
+    # 1:00 AM UTC = 2:00 AM WAT (West Africa Time, UTC+1)
     - cron: '0 1 * * *'
   workflow_dispatch:   # allow manual trigger from GitHub UI
 
