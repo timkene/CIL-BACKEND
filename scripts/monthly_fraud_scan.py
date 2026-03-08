@@ -85,23 +85,31 @@ def delete_previous_scan(scan_month: str) -> None:
     print(f"  Cleared previous scan data for {scan_month}")
 
 
-def _clean(v):
-    """Convert NaN/Inf/numpy floats to JSON-safe Python scalars."""
-    import math
-    # Handle numpy scalar types (float32, float64, int32, int64, etc.)
-    try:
-        import numpy as np
-        if isinstance(v, (np.floating,)):
-            if np.isnan(v) or np.isinf(v):
-                return None
-            return float(v)
-        if isinstance(v, np.integer):
-            return int(v)
-    except ImportError:
-        pass
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+import math as _math
+
+try:
+    import numpy as _np
+    _HAS_NUMPY = True
+except ImportError:
+    _HAS_NUMPY = False
+
+
+def _sanitize(obj):
+    """Recursively convert NaN/Inf and numpy scalars to JSON-safe Python types."""
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    if _HAS_NUMPY:
+        if isinstance(obj, _np.floating):
+            return None if (_np.isnan(obj) or _np.isinf(obj)) else float(obj)
+        if isinstance(obj, _np.integer):
+            return int(obj)
+        if isinstance(obj, _np.bool_):
+            return bool(obj)
+    if isinstance(obj, float) and (_math.isnan(obj) or _math.isinf(obj)):
         return None
-    return v
+    return obj
 
 
 def save_results(scan_month: str, results: list) -> int:
@@ -118,7 +126,7 @@ def save_results(scan_month: str, results: list) -> int:
         # Pull per-metric values from metric_scores
         metric_map = {m["metric"]: m["value"] for m in r.get("metric_scores", [])}
 
-        rows.append({
+        row = {
             "scan_month":          scan_month,
             "provider_id":         prov.get("provider_id", ""),
             "provider_name":       prov.get("provider_name", ""),
@@ -127,18 +135,19 @@ def save_results(scan_month: str, results: list) -> int:
             "total_score":         r.get("total_score"),
             "max_score":           r.get("max_score", 10),
             "alert_status":        alert,
-            "total_cost":          _clean(raw.get("total_cost")),
-            "unique_enrollees":    _clean(raw.get("unique_enrollees")),
-            "cpe":                 _clean(raw.get("cpe")),
-            "cpv":                 _clean(raw.get("cpv")),
-            "vpe":                 _clean(raw.get("vpe")),
-            "drug_ratio_pct":      _clean(raw.get("drug_ratio_pct")),
-            "dx_repeat_pct":       _clean(metric_map.get("Dx Repeat Rate")),
-            "short_interval_pct":  _clean(metric_map.get("Short Interval")),
+            "total_cost":          raw.get("total_cost"),
+            "unique_enrollees":    raw.get("unique_enrollees"),
+            "cpe":                 raw.get("cpe"),
+            "cpv":                 raw.get("cpv"),
+            "vpe":                 raw.get("vpe"),
+            "drug_ratio_pct":      raw.get("drug_ratio_pct"),
+            "dx_repeat_pct":       metric_map.get("Dx Repeat Rate"),
+            "short_interval_pct":  metric_map.get("Short Interval"),
             "network_signal":      net_sig.get("network_signal"),
-            "cpe_ratio":           _clean(net_sig.get("cpe_ratio")),
-            "groups_served":       _clean(net_sig.get("groups_served")),
-        })
+            "cpe_ratio":           net_sig.get("cpe_ratio"),
+            "groups_served":       net_sig.get("groups_served"),
+        }
+        rows.append(_sanitize(row))
 
     if not rows:
         return 0
