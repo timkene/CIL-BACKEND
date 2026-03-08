@@ -6,10 +6,11 @@ for the renewal report. Each section is driven by actual data.
 import json
 import os
 import anthropic
+import httpx
 from .data_collector import RenewalData
 
 MODEL = "claude-sonnet-4-6"
-OPUS_MODEL = "claude-opus-4-5"  # Opus for deep strategic reasoning
+OPUS_MODEL = "claude-opus-4-6"  # Opus for deep strategic reasoning
 
 def _call_claude(prompt: str, system: str = None, max_tokens: int = 1500) -> str:
     """Call Claude API and return text response."""
@@ -27,6 +28,88 @@ def _call_claude(prompt: str, system: str = None, max_tokens: int = 1500) -> str
     
     response = client.messages.create(**kwargs)
     return response.content[0].text.strip()
+
+
+def get_provider_fraud_scores(data: RenewalData) -> dict:
+    """
+    Calls the fraud API (include_ai=False) for each top provider.
+    Passes group_id so the API runs the network CPE benchmark.
+    Returns {provider_name: response_dict | None}.
+    Falls back gracefully if the API is unreachable.
+    """
+    fraud_api_url = os.environ.get("FRAUD_API_URL", "").rstrip("/")
+    if not fraud_api_url:
+        return {}
+
+    results = {}
+    start = data.current_start.isoformat() if data.current_start else None
+    end   = data.current_end.isoformat()   if data.current_end   else None
+    if not start or not end:
+        return {}
+
+    for prov in data.top_providers[:5]:
+        name = prov.get("name", "")
+        if not name or name == "Unknown":
+            continue
+        try:
+            resp = httpx.post(
+                f"{fraud_api_url}/fraud-score",
+                json={
+                    "provider_name": name,
+                    "start_date":    start,
+                    "end_date":      end,
+                    "include_ai":    False,
+                    "group_id":      str(data.group_id),
+                },
+                timeout=30.0,
+            )
+            if resp.status_code == 200:
+                results[name] = resp.json()
+            elif resp.status_code == 404:
+                results[name] = {"_status": "NOT_FOUND"}   # provider not in claims DB
+            else:
+                results[name] = None                        # API error → truly unknown
+        except Exception:
+            results[name] = None
+
+    return results
+
+
+def _provider_verdict(fraud_result: dict | None) -> tuple[str, int]:
+    """
+    Derive a (verdict_string, encounters_this_group) tuple from a fraud API response.
+
+    Guards:
+    - None result → fraud API was down → "UNKNOWN" status, flag for manual review
+    - encounters_this_group < 10 → LOW CONFIDENCE suffix
+    - network_signal = INSUFFICIENT_DATA → state data is insufficient, do NOT infer CLEAN
+    - network_signal = GROUP_TARGETED → flag regardless of band score
+    """
+    if fraud_result is None:
+        return "⚠ UNKNOWN (fraud API unavailable — manual review required)", 0
+    if fraud_result.get("_status") == "NOT_FOUND":
+        return "— NOT IN CLAIMS DB (no matching provider data in period)", 0
+
+    score        = fraud_result.get("total_score", 0) or 0
+    alert_status = fraud_result.get("alert_status", "CLEAR")
+    signals      = fraud_result.get("network_signals", [])
+    net_signal   = signals[0].get("network_signal", "INSUFFICIENT_DATA") if signals else "INSUFFICIENT_DATA"
+    cpe_ratio    = signals[0].get("cpe_ratio", 0)    if signals else 0
+    encounters   = signals[0].get("encounters_this_group", 0) if signals else 0
+
+    band_verdict = {
+        "ALERT":     "🚨 ALERT",
+        "WATCHLIST": "⚠ WATCHLIST",
+        "CLEAR":     "✅ CLEAN",
+    }.get(alert_status, "✅ CLEAN")
+
+    confidence = " [LOW CONFIDENCE — <10 encounters]" if encounters < 10 else ""
+
+    if net_signal == "GROUP_TARGETED":
+        return f"{band_verdict} | 🎯 NETWORK: GROUP-TARGETED (CPE ratio {cpe_ratio}×){confidence}", encounters
+    if net_signal == "INSUFFICIENT_DATA":
+        return f"{band_verdict} | — network: INSUFFICIENT DATA (manual tariff review recommended){confidence}", encounters
+    return f"{band_verdict} | ✅ network: CLEAN (CPE ratio {cpe_ratio}×){confidence}", encounters
 
 
 def generate_executive_summary(data: RenewalData) -> list[str]:
@@ -194,7 +277,8 @@ def generate_renewal_strategy(data: RenewalData) -> str:
     """
     Deep AI renewal strategy using Claude Opus.
     Reasons across providers, repeat enrollees, utilisation breadth, MLR trend,
-    and PMPM pricing to produce specific, data-driven renewal recommendations.
+    PMPM pricing, and provider fraud signals to produce specific, data-driven
+    renewal recommendations.
     """
     util_rate = round(data.members_utilizing / data.active_members * 100, 1) if data.active_members else 0
     util_class = (
@@ -204,6 +288,22 @@ def generate_renewal_strategy(data: RenewalData) -> str:
         "HIGH (>80%) — near-universal utilisation. Structural concern: nearly every member is using the scheme, pointing to embedded disease burden or moral hazard."
     )
     
+    # Fetch fraud verdicts for top providers (fails silently if API unavailable)
+    fraud_scores = get_provider_fraud_scores(data)
+    fraud_verdicts_str = ""
+    if fraud_scores:
+        lines = []
+        for prov_name, result in fraud_scores.items():
+            verdict, encounters = _provider_verdict(result)
+            score = result.get("total_score", "N/A") if result else "N/A"
+            lines.append(
+                f"  - {prov_name}: {verdict} "
+                f"(score: {score}/10, encounters: {encounters})"
+            )
+        fraud_verdicts_str = "\n".join(lines)
+    else:
+        fraud_verdicts_str = "  (Fraud API not available — manual review required for all providers)"
+
     repeat_members_str = json.dumps(data.repeat_high_cost_members, indent=2) if data.repeat_high_cost_members else "[]"
     providers_str = json.dumps(data.provider_dual_period, indent=2) if data.provider_dual_period else "[]"
     top5_str = json.dumps([
@@ -248,6 +348,11 @@ PROVIDER PERFORMANCE (both contracts):
 FLAGS: NEW_PROVIDER=not seen before | HIGH_AVG_PA=avg PA >₦80k | RAPID_GROWTH=>80% spend growth
 {providers_str}
 
+PROVIDER FRAUD SIGNALS (band-level score + network CPE benchmark):
+Verdicts: 🚨 ALERT=≥5/10 | ⚠ WATCHLIST=3-4/10 | ✅ CLEAN=<3/10
+Network: 🎯 GROUP-TARGETED=provider charges this group >1.5× their network average CPE
+{fraud_verdicts_str}
+
 MONTHLY CLAIMS TREND:
 {monthly_str}
 
@@ -265,9 +370,15 @@ Actions: CDMP enrolment | mandatory referral gating | sub-limit per condition | 
 Do NOT recommend removing members outright (contractual issue) — recommend plan structure changes.
 
 **3. PROVIDER NETWORK ACTIONS**
-For each flagged provider (NEW_PROVIDER, HIGH_AVG_PA, RAPID_GROWTH): state action clearly.
-Actions: NEGOTIATE TARIFF | ADD TO WATCHLIST | REQUIRE PRE-AUTH ESCALATION | CONSIDER NETWORK REMOVAL.
+For each flagged provider (NEW_PROVIDER, HIGH_AVG_PA, RAPID_GROWTH, fraud ALERT/WATCHLIST, GROUP-TARGETED): state action clearly.
+Actions: NEGOTIATE TARIFF | ADD TO WATCHLIST | REQUIRE PRE-AUTH ESCALATION | CONSIDER NETWORK REMOVAL | FRAUD INVESTIGATION.
 Be specific about which providers and why. Per-PA averages above ₦200k are red flags.
+For GROUP-TARGETED providers: their CPE for this group is >1.5× their network average — flag for tariff renegotiation.
+For ALERT/WATCHLIST fraud scores: recommend pre-auth escalation or claims audit before renewal.
+CRITICAL GUARDS — you MUST apply these:
+1. LOW CONFIDENCE: If a provider verdict includes [LOW CONFIDENCE — <10 encounters], do NOT recommend network removal or fraud investigation. State the data is insufficient and recommend a 90-day claims audit before any action.
+2. INSUFFICIENT DATA: If network_signal = INSUFFICIENT DATA, do NOT infer the provider is clean. State that network benchmarking was not possible (provider serves <3 groups in the network) and recommend manual tariff comparison.
+3. UNKNOWN (fraud API down): If verdict = UNKNOWN, state that fraud scoring was unavailable for this provider and flag for manual fraud review before renewal sign-off. Do not infer any risk level.
 
 **4. BENEFIT STRUCTURE CHANGES**
 Should overall limit change? By how much? Justify from utilisation data.
@@ -298,39 +409,44 @@ def generate_all_narratives(data: RenewalData) -> dict:
         print("[AI] Executive summary...")
         narratives["executive_bullets"] = generate_executive_summary(data)
     except Exception as e:
-        print(f"[AI] Executive summary failed: {e}")
+        import traceback; traceback.print_exc()
+        print(f"[AI] Executive summary FAILED: {e}")
         narratives["executive_bullets"] = [
             f"Portfolio projected annual MLR: {data.projected_mlr}% (threshold: 75%)",
             f"SRS classification: {data.srs_classification} — Top 5 members = {data.top5_pct}% of claims",
             f"Cash compliance: ₦{data.cash_received:,.0f} received of ₦{data.total_debit:,.0f} billed",
         ]
-    
+
     try:
         print("[AI] SRS analysis...")
         narratives["srs_narrative"] = generate_srs_analysis(data)["narrative"]
     except Exception as e:
-        print(f"[AI] SRS failed: {e}")
+        import traceback; traceback.print_exc()
+        print(f"[AI] SRS FAILED: {e}")
         narratives["srs_narrative"] = f"SRS classification: {data.srs_classification}. Top 5 concentration: {data.top5_pct}%. Chronic disease load: {data.chronic_pct}%."
-    
+
     try:
         print("[AI] Premium recommendation...")
         narratives["premium_narrative"] = generate_premium_recommendation(data)["narrative"]
     except Exception as e:
-        print(f"[AI] Premium recommendation failed: {e}")
+        import traceback; traceback.print_exc()
+        print(f"[AI] Premium recommendation FAILED: {e}")
         narratives["premium_narrative"] = f"Based on PMPM analysis, the actuarially-sound premium is ₦{data.actuarial_premium:,.0f}/head/year at 70% target MLR."
-    
+
     try:
         print("[AI] Provider narrative...")
         narratives["provider_narrative"] = generate_provider_narrative(data)["narrative"]
     except Exception as e:
-        print(f"[AI] Provider narrative failed: {e}")
+        import traceback; traceback.print_exc()
+        print(f"[AI] Provider narrative FAILED: {e}")
         narratives["provider_narrative"] = "Provider concentration analysis pending."
-    
+
     try:
         print("[AI] Renewal strategy (Opus)...")
         narratives["renewal_strategy"] = generate_renewal_strategy(data)
     except Exception as e:
-        print(f"[AI] Renewal strategy failed: {e}")
+        import traceback; traceback.print_exc()
+        print(f"[AI] Renewal strategy FAILED: {e}")
         narratives["renewal_strategy"] = (
             f"{data.srs_classification} portfolio — {data.top5_pct:.1f}% of claims in top 5 members. "
             f"Projected MLR: {data.projected_mlr}%. "

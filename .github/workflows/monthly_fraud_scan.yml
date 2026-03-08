@@ -1,0 +1,32 @@
+name: Monthly Provider Fraud Scan
+
+on:
+  schedule:
+    # 1st of every month at 02:00 UTC (3:00 AM WAT)
+    - cron: '0 2 1 * *'
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install duckdb supabase python-dateutil python-dotenv pandas
+
+      - name: Run monthly fraud scan
+        env:
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          SUPABASE_URL:     ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:     ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/monthly_fraud_scan.py

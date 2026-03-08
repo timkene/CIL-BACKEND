@@ -1109,6 +1109,155 @@ def generate_pdf(data: RenewalData, narratives: dict) -> bytes:
             shift_rows[:12],
             [CONTENT_W*0.24, CONTENT_W*0.18, CONTENT_W*0.18, CONTENT_W*0.10, CONTENT_W*0.30]
         ))
+
+    # ── 6.3 PROVIDER FRAUD & NETWORK RISK SIGNALS ────────────────────────────
+    fraud_raw = narratives.get("_fraud_scores_raw", {})
+    if fraud_raw:
+        story.append(sp(2))
+        story.append(h2("6.3 Provider Fraud & Network Risk Signals"))
+        story.append(body(
+            "Fraud scores are computed using Tukey fence benchmarking across band peers "
+            "(VPE, CPE, CPV, Drug Ratio, Dx Repeat Rate, Short Visit Interval — max 10 pts). "
+            "Network CPE benchmark compares this provider's cost-per-encounter for this group "
+            "vs their average across all other groups they serve. "
+            "<b>ALERT ≥5 | WATCHLIST 3–4 | CLEAR &lt;3</b>"
+        ))
+        story.append(sp(1))
+
+        # ── Fraud score table ─────────────────────────────────────────────────
+        def _row_bg(alert_status):
+            return {
+                "ALERT":     LIGHT_RED,
+                "WATCHLIST": LIGHT_YELLOW,
+                "CLEAR":     LIGHT_GREEN,
+            }.get(alert_status, LIGHT_GRAY)
+
+        fraud_headers = ["Provider", "Score", "Band Status", "Network Signal", "Encounters", "Verdict"]
+        fraud_col_w = [CONTENT_W*0.28, CONTENT_W*0.07, CONTENT_W*0.12,
+                       CONTENT_W*0.15, CONTENT_W*0.10, CONTENT_W*0.28]
+
+        fraud_data = [[Paragraph(h, ST["TH"]) for h in fraud_headers]]
+        fraud_style = [
+            ("BACKGROUND", (0, 0), (-1, 0), BRAND_BLUE),
+            ("TEXTCOLOR",  (0, 0), (-1, 0), WHITE),
+            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("ALIGN",      (0, 0), (-1, 0), "CENTER"),
+            ("VALIGN",     (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 5),
+            ("GRID", (0, 0), (-1, -1), 0.5, BORDER_GRAY),
+        ]
+
+        LIGHT_BLUE_ROW = colors.HexColor("#EAF3FB")
+
+        for i, (prov_name, result) in enumerate(fraud_raw.items(), start=1):
+            if result is None:
+                # API connection error — truly unknown
+                score_str, alert_st, net_str = "N/A", "UNKNOWN", "UNAVAILABLE"
+                encounters, bg = 0, LIGHT_GRAY
+                verdict = "UNKNOWN — fraud API unavailable"
+            elif result.get("_status") == "NOT_FOUND":
+                # Provider name not matched in claims DB
+                score_str, alert_st, net_str = "—", "NOT FOUND", "—"
+                encounters, bg = 0, LIGHT_BLUE_ROW
+                verdict = "Not in claims DB — possible name mismatch"
+            else:
+                score      = result.get("total_score", "N/A")
+                alert_st   = result.get("alert_status", "CLEAR")
+                signals    = result.get("network_signals", [])
+                net_signal = signals[0].get("network_signal", "INSUFFICIENT_DATA") if signals else "INSUFFICIENT_DATA"
+                cpe_ratio  = signals[0].get("cpe_ratio", 0) if signals else 0
+                encounters = signals[0].get("encounters_this_group", 0) if signals else 0
+                score_str  = f"{score}/10"
+                net_str    = f"GROUP-TARGETED ({cpe_ratio}×)" if net_signal == "GROUP_TARGETED" else net_signal.replace("_", " ")
+                conf_sfx   = " [LOW CONF]" if encounters < 10 else ""
+                verdict    = f"{alert_st}{conf_sfx}"
+                bg         = _row_bg(alert_st)
+
+            row = [
+                Paragraph(prov_name[:38], ST["TCB"]),
+                Paragraph(score_str, ST["TC"]),
+                Paragraph(alert_st, ST["TCB"]),
+                Paragraph(net_str[:30], ST["TC"]),
+                Paragraph(str(encounters), ST["TC"]),
+                Paragraph(verdict[:40], ST["TC"]),
+            ]
+            fraud_data.append(row)
+            fraud_style.append(("BACKGROUND", (0, i), (-1, i), bg))
+
+        ft = Table(fraud_data, colWidths=fraud_col_w)
+        ft.setStyle(TableStyle(fraud_style))
+        story.append(ft)
+        story.append(sp(1))
+
+        # ── Network CPE detail table ──────────────────────────────────────────
+        net_rows = []
+        for result in fraud_raw.values():
+            if not result:
+                continue
+            for sig in result.get("network_signals", []):
+                ns = sig.get("network_signal", "INSUFFICIENT_DATA")
+                net_rows.append((sig, ns))
+
+        if net_rows:
+            story.append(sp(1))
+            story.append(h3("Network CPE Benchmark Detail"))
+            story.append(body(
+                "CPE Ratio = this group's cost-per-encounter ÷ provider's network average CPE. "
+                ">1.5× = GROUP-TARGETED (provider inflates costs specifically for this group)."
+            ))
+            story.append(sp(1))
+
+            net_headers = ["Provider", "CPE This Group", "CPE Network", "CPE Ratio", "Groups Served", "Signal"]
+            net_col_w   = [CONTENT_W*0.30, CONTENT_W*0.13, CONTENT_W*0.13,
+                           CONTENT_W*0.10, CONTENT_W*0.12, CONTENT_W*0.22]
+
+            net_data  = [[Paragraph(h, ST["TH"]) for h in net_headers]]
+            net_style = [
+                ("BACKGROUND", (0, 0), (-1, 0), BRAND_BLUE),
+                ("TEXTCOLOR",  (0, 0), (-1, 0), WHITE),
+                ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("ALIGN",      (0, 0), (-1, 0), "CENTER"),
+                ("VALIGN",     (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING",  (0, 0), (-1, -1), 5),
+                ("GRID", (0, 0), (-1, -1), 0.5, BORDER_GRAY),
+            ]
+            net_bg_map = {
+                "GROUP_TARGETED":  LIGHT_RED,
+                "CLEAN":           LIGHT_GREEN,
+                "INSUFFICIENT_DATA": LIGHT_GRAY,
+            }
+
+            for i, (sig, ns) in enumerate(net_rows, start=1):
+                p_name  = sig.get("provider_name", "")[:32]
+                cpe_grp = N(sig.get("cpe_this_group", 0))
+                cpe_net = N(sig.get("cpe_network", 0))
+                ratio   = f"{sig.get('cpe_ratio', 0):.2f}×"
+                grps    = str(sig.get("groups_served", 0))
+                signal  = ns.replace("_", " ")
+                bg      = net_bg_map.get(ns, LIGHT_GRAY)
+
+                row = [
+                    Paragraph(p_name, ST["TCB"]),
+                    Paragraph(cpe_grp, ST["TC"]),
+                    Paragraph(cpe_net, ST["TC"]),
+                    Paragraph(ratio, ST["TCB"]),
+                    Paragraph(grps, ST["TC"]),
+                    Paragraph(signal, ST["TCB"]),
+                ]
+                net_data.append(row)
+                net_style.append(("BACKGROUND", (0, i), (-1, i), bg))
+
+            nt = Table(net_data, colWidths=net_col_w)
+            nt.setStyle(TableStyle(net_style))
+            story.append(nt)
+            story.append(sp(1))
+
     story.append(PageBreak())
     
     # ── 7. PLAN ADEQUACY (CORRECTED) ──────────────────────────────────────────

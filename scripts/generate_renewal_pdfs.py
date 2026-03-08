@@ -76,6 +76,7 @@ sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 from apis.ai_client.data_collector import collect_data
 from apis.ai_client.narrator import generate_all_narratives
 from apis.ai_client.pdf_generator import generate_pdf
+from apis.fraud.direct import score_provider_direct
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -233,6 +234,29 @@ def main():
             else:
                 narratives = {}
                 print(f"    (ANTHROPIC_API_KEY not set — skipping AI narratives)")
+
+            # Fraud scores — direct DB calls (no HTTP server needed)
+            fraud_raw = {}
+            try:
+                import duckdb as _duckdb
+                fraud_conn = _duckdb.connect(MOTHERDUCK_DSN)
+                group_id_str = str(data.group_id) if data.group_id else None
+                for prov in (data.top_providers or [])[:5]:
+                    pname = prov.get("name", "")
+                    if not pname or pname == "Unknown":
+                        continue
+                    result = score_provider_direct(
+                        fraud_conn, pname,
+                        str(start_date), str(end_date),
+                        group_id_str,
+                    )
+                    fraud_raw[pname] = result
+                fraud_conn.close()
+                if fraud_raw:
+                    narratives["_fraud_scores_raw"] = fraud_raw
+                    print(f"    Fraud scores: {len(fraud_raw)} providers scored")
+            except Exception as fe:
+                print(f"    (fraud scoring skipped: {fe})")
 
             # Generate PDF bytes
             pdf_bytes = generate_pdf(data, narratives)

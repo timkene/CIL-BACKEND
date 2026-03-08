@@ -25,6 +25,10 @@ from core.database import get_db_connection
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Summary table for client dashboard (populated by nightly batch; API reads from here when available)
+CLIENT_DASHBOARD_SUMMARY_SCHEMA = "AI DRIVEN DATA"
+CLIENT_DASHBOARD_SUMMARY_TABLE = "CLIENT_DASHBOARD_SUMMARY"
+
 def get_user_allocated_clients(user_id: Optional[int] = None) -> Optional[list]:
     """
     Get list of clients allocated to a user.
@@ -73,6 +77,61 @@ def get_user_allocated_clients(user_id: Optional[int] = None) -> Optional[list]:
         traceback.print_exc()
         # On error, deny access (fail closed for security)
         return []
+
+
+def load_client_dashboard_from_summary(conn=None):
+    """
+    Read client dashboard data from the precomputed summary table, if it exists and has data.
+    Returns a Polars DataFrame or None if the table is missing/empty.
+    """
+    if conn is None:
+        conn = get_db_connection()
+    try:
+        q = f'''
+        SELECT * FROM "{CLIENT_DASHBOARD_SUMMARY_SCHEMA}"."{CLIENT_DASHBOARD_SUMMARY_TABLE}"
+        '''
+        df = conn.execute(q).fetchdf()
+        if df is None or df.empty:
+            return None
+        return pl.from_pandas(df)
+    except Exception as e:
+        logger.debug("Client dashboard summary table not available: %s", e)
+        return None
+
+
+def populate_client_dashboard_summary_table(conn=None):
+    """
+    Compute client summary and write it to CLIENT_DASHBOARD_SUMMARY (for nightly batch).
+    Uses get_db_connection() for compute; writes to the same connection.
+    Returns (success: bool, rows: int, error: Optional[str]).
+    """
+    if conn is None:
+        conn = get_db_connection()
+    try:
+        summary_df = calculate_client_summary_basic()
+        if summary_df is None or summary_df.height == 0:
+            # Still create/truncate table so API sees "fresh" empty state
+            summary_pd = pd.DataFrame(columns=[
+                "groupname", "claims_cost", "unclaimed_pa_cost", "total_cost",
+                "visit_count", "unique_enrollees", "active_members"
+            ])
+        else:
+            summary_pd = summary_df.to_pandas()
+        summary_pd["refreshed_at"] = datetime.now()
+        conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{CLIENT_DASHBOARD_SUMMARY_SCHEMA}"')
+        conn.execute(f'DROP TABLE IF EXISTS "{CLIENT_DASHBOARD_SUMMARY_SCHEMA}"."{CLIENT_DASHBOARD_SUMMARY_TABLE}"')
+        conn.register("_client_summary_df", summary_pd)
+        conn.execute(
+            f'CREATE TABLE "{CLIENT_DASHBOARD_SUMMARY_SCHEMA}"."{CLIENT_DASHBOARD_SUMMARY_TABLE}" '
+            'AS SELECT * FROM _client_summary_df'
+        )
+        conn.unregister("_client_summary_df")
+        n = len(summary_pd)
+        logger.info("CLIENT_DASHBOARD_SUMMARY populated with %s rows", n)
+        return (True, n, None)
+    except Exception as e:
+        logger.exception("Failed to populate CLIENT_DASHBOARD_SUMMARY: %s", e)
+        return (False, 0, str(e))
 
 
 def calculate_client_summary_basic() -> pl.DataFrame:
@@ -277,25 +336,44 @@ async def get_client_dashboard(
     """
     if quick:
         return await get_client_dashboard_quick(limit=limit, user_id=user_id)
-    # Run heavy summary computation with a timeout so we respond before Render's proxy (often 30s on free tier).
-    # If we don't, the proxy returns 502 and no error is logged in the app.
-    _DASHBOARD_TIMEOUT = 25.0  # seconds
 
+    # Prefer precomputed summary table (populated by nightly batch) for fast response
+    refreshed_at = None
     try:
-        loop = asyncio.get_event_loop()
-        summary_df = await asyncio.wait_for(
-            loop.run_in_executor(None, calculate_client_summary_basic),
-            timeout=_DASHBOARD_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Client dashboard request timed out after %.0fs (proxy may return 502 if we don't respond in time).",
-            _DASHBOARD_TIMEOUT,
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="Dashboard request took too long. Please try again or use a smaller limit.",
-        )
+        conn = get_db_connection()
+        summary_df = load_client_dashboard_from_summary(conn)
+    except Exception as e:
+        logger.debug("Could not load client dashboard from summary: %s", e)
+        summary_df = None
+    if summary_df is not None and summary_df.height > 0:
+        if "refreshed_at" in summary_df.columns:
+            try:
+                refreshed_at = summary_df["refreshed_at"][0]
+                if hasattr(refreshed_at, "isoformat"):
+                    refreshed_at = refreshed_at.isoformat()
+            except Exception:
+                pass
+            summary_df = summary_df.select(
+                [c for c in summary_df.columns if c != "refreshed_at"]
+            )
+    if summary_df is None or summary_df.height == 0:
+        # Fallback: compute on the fly with timeout
+        _DASHBOARD_TIMEOUT = 25.0
+        try:
+            loop = asyncio.get_event_loop()
+            summary_df = await asyncio.wait_for(
+                loop.run_in_executor(None, calculate_client_summary_basic),
+                timeout=_DASHBOARD_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Client dashboard request timed out after %.0fs.",
+                _DASHBOARD_TIMEOUT,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Dashboard request took too long. Please try again or use ?quick=1.",
+            )
 
     try:
         # Get user's allocated clients
@@ -337,17 +415,18 @@ async def get_client_dashboard(
                 .to_dict("records")
             )
 
-        return {
+        out = {
             "success": True,
             "dashboard": {
                 "top_by_cost": top_by_cost_clients,
                 "top_by_active_members": top_by_active_members_clients,
             },
-            "filters": {
-                "limit": limit,
-            },
+            "filters": {"limit": limit},
             "timestamp": datetime.now().isoformat(),
         }
+        if refreshed_at is not None:
+            out["refreshed_at"] = refreshed_at
+        return out
 
     except HTTPException:
         raise

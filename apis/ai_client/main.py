@@ -42,7 +42,7 @@ from pydantic import BaseModel, Field
 import uvicorn
 
 from .data_collector import collect_data, RenewalData
-from .narrator import generate_all_narratives
+from .narrator import generate_all_narratives, get_provider_fraud_scores, _provider_verdict
 from .pdf_generator import generate_pdf
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -165,6 +165,18 @@ class AnalysisResponse(BaseModel):
     premium_narrative: str
     provider_narrative: str
 
+    # Provider intelligence
+    top_providers: list = Field(default_factory=list)
+    top_members: list = Field(default_factory=list)
+    top_diagnoses: list = Field(default_factory=list)
+    repeat_high_cost_members: list = Field(default_factory=list)
+    monthly_claims: list = Field(default_factory=list)
+
+    # Risk matrices
+    provider_risk_matrix: list = Field(default_factory=list)    # cross-period provider flags
+    provider_fraud_scores: list = Field(default_factory=list)   # band-level fraud verdicts
+    provider_network_benchmark: list = Field(default_factory=list)  # network CPE signals
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # HELPER FUNCTIONS
@@ -220,6 +232,33 @@ def _build_analysis_response(data: RenewalData, narratives: dict) -> AnalysisRes
         }
         ai_strategy = srs_templates.get(data.srs_classification, "")
 
+    # ── Build provider risk/fraud fields ──────────────────────────────────────
+    # provider_risk_matrix: cross-period provider flags (always from data)
+    provider_risk_matrix = data.provider_dual_period or []
+
+    # provider_fraud_scores + provider_network_benchmark: from pre-fetched fraud results
+    fraud_raw = narratives.get("_fraud_scores_raw", {})
+    provider_fraud_scores = []
+    provider_network_benchmark = []
+
+    for prov_name, result in fraud_raw.items():
+        verdict, encounters = _provider_verdict(result)
+        not_found = result is not None and result.get("_status") == "NOT_FOUND"
+        entry = {
+            "provider_name": prov_name,
+            "total_score": result.get("total_score") if result and not not_found else None,
+            "max_score": result.get("max_score", 10) if result and not not_found else 10,
+            "alert_status": "NOT_FOUND" if not_found else (result.get("alert_status") if result else "UNKNOWN"),
+            "verdict": verdict,
+            "encounters_this_group": encounters,
+        }
+        provider_fraud_scores.append(entry)
+
+        # Network signals per provider
+        if result:
+            for sig in result.get("network_signals", []):
+                provider_network_benchmark.append(sig)
+
     return AnalysisResponse(
         group_name=data.group_name,
         analysis_date=data.analysis_date,
@@ -247,6 +286,16 @@ def _build_analysis_response(data: RenewalData, narratives: dict) -> AnalysisRes
         srs_narrative=narratives.get("srs_narrative", ""),
         premium_narrative=narratives.get("premium_narrative", ""),
         provider_narrative=narratives.get("provider_narrative", ""),
+        # Provider intelligence
+        top_providers=data.top_providers or [],
+        top_members=data.top_members or [],
+        top_diagnoses=data.top_diagnoses or [],
+        repeat_high_cost_members=data.repeat_high_cost_members or [],
+        monthly_claims=data.monthly_claims or [],
+        # Risk matrices
+        provider_risk_matrix=provider_risk_matrix,
+        provider_fraud_scores=provider_fraud_scores,
+        provider_network_benchmark=provider_network_benchmark,
     )
 
 
@@ -275,29 +324,38 @@ async def _run_report_job(job_id: str, req: ReportRequest):
             ),
         )
 
-        # Step 2: AI narratives
+        # Step 2: Fraud scores (always, if FRAUD_API_URL is set)
+        narratives = {}
+        if os.environ.get("FRAUD_API_URL"):
+            JOB_STORE[job_id]["progress"] = "Fetching provider fraud scores…"
+            fraud_raw = await loop.run_in_executor(
+                None, lambda: get_provider_fraud_scores(data)
+            )
+            narratives["_fraud_scores_raw"] = fraud_raw
+
+        # Step 3: AI narratives
         if req.include_ai_narratives and os.environ.get("ANTHROPIC_API_KEY"):
             JOB_STORE[job_id]["progress"] = "Generating AI narrative sections…"
-            narratives = await loop.run_in_executor(
+            ai_narratives = await loop.run_in_executor(
                 None, lambda: generate_all_narratives(data)
             )
+            narratives.update(ai_narratives)
         else:
             JOB_STORE[job_id]["progress"] = "Skipping AI narratives (no API key)…"
-            narratives = {}
 
-        # Step 3: PDF generation
+        # Step 4: PDF generation
         JOB_STORE[job_id]["progress"] = "Building PDF report…"
         pdf_bytes = await loop.run_in_executor(
             None, lambda: generate_pdf(data, narratives)
         )
 
-        # Step 4: Save PDF
+        # Step 5: Save PDF
         safe_name = "".join(c if c.isalnum() else "_" for c in req.group_name)[:40]
         filename = f"renewal_{safe_name}_{job_id[:8]}.pdf"
         filepath = OUTPUT_DIR / filename
         filepath.write_bytes(pdf_bytes)
 
-        # Step 5: Build JSON analysis
+        # Step 6: Build JSON analysis
         analysis = _build_analysis_response(data, narratives)
 
         JOB_STORE[job_id].update({
@@ -497,13 +555,26 @@ async def analyze_only(req: ReportRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Data collection error: {e}")
 
-    if req.include_ai_narratives and os.environ.get("ANTHROPIC_API_KEY"):
-        loop = asyncio.get_event_loop()
-        narratives = await loop.run_in_executor(
+    loop = asyncio.get_event_loop()
+    narratives: dict = {}
+
+    # Always fetch fraud scores if FRAUD_API_URL is set (no AI key needed)
+    if os.environ.get("FRAUD_API_URL"):
+        fraud_raw = await loop.run_in_executor(
+            None, lambda: get_provider_fraud_scores(data)
+        )
+        narratives["_fraud_scores_raw"] = fraud_raw
+
+    key_set = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    print(f"[analyze] include_ai={req.include_ai_narratives}  api_key_set={key_set}")
+    if req.include_ai_narratives and key_set:
+        print("[analyze] → calling generate_all_narratives()")
+        ai_narratives = await loop.run_in_executor(
             None, lambda: generate_all_narratives(data)
         )
+        narratives.update(ai_narratives)
     else:
-        narratives = {}
+        print(f"[analyze] → SKIPPING AI  (include_ai={req.include_ai_narratives}, key={key_set})")
 
     return _build_analysis_response(data, narratives)
 

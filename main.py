@@ -29,7 +29,7 @@ import asyncio
 from datetime import datetime, date
 
 # Import routers (tariff pulls in Streamlit — skip on Render to avoid OOM)
-from api.routes import mlr, utilization, health, enrollees, clients, finance, paclaims, admin, providers, banding
+from api.routes import mlr, utilization, health, enrollees, clients, finance, paclaims, admin, providers, banding, fraud_scores
 # Skip tariff on Render: RENDER is set by Render; avoid importing Streamlit-heavy modules (saves 512MB+)
 _RENDER_DEPLOY = (
     os.getenv("RENDER", "").lower() in ("true", "1", "yes")
@@ -176,6 +176,7 @@ app.include_router(providers.router, prefix="/api/v1/providers", tags=["Provider
 if tariff is not None:
     app.include_router(tariff.router, prefix="/api/v1/tariff", tags=["Tariff"])
 app.include_router(banding.router, prefix="/api/v1/banding", tags=["Hospital Band Analysis"])
+app.include_router(fraud_scores.router, prefix="/api/v1/fraud-scores", tags=["Provider Fraud"])
 
 # Root endpoint
 @app.get("/")
