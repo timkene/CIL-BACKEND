@@ -86,8 +86,19 @@ def delete_previous_scan(scan_month: str) -> None:
 
 
 def _clean(v):
-    """Convert NaN/Inf floats to None so JSON serialization doesn't fail."""
+    """Convert NaN/Inf/numpy floats to JSON-safe Python scalars."""
     import math
+    # Handle numpy scalar types (float32, float64, int32, int64, etc.)
+    try:
+        import numpy as np
+        if isinstance(v, (np.floating,)):
+            if np.isnan(v) or np.isinf(v):
+                return None
+            return float(v)
+        if isinstance(v, np.integer):
+            return int(v)
+    except ImportError:
+        pass
     if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
         return None
     return v
@@ -117,7 +128,7 @@ def save_results(scan_month: str, results: list) -> int:
             "max_score":           r.get("max_score", 10),
             "alert_status":        alert,
             "total_cost":          _clean(raw.get("total_cost")),
-            "unique_enrollees":    raw.get("unique_enrollees"),
+            "unique_enrollees":    _clean(raw.get("unique_enrollees")),
             "cpe":                 _clean(raw.get("cpe")),
             "cpv":                 _clean(raw.get("cpv")),
             "vpe":                 _clean(raw.get("vpe")),
@@ -126,7 +137,7 @@ def save_results(scan_month: str, results: list) -> int:
             "short_interval_pct":  _clean(metric_map.get("Short Interval")),
             "network_signal":      net_sig.get("network_signal"),
             "cpe_ratio":           _clean(net_sig.get("cpe_ratio")),
-            "groups_served":       net_sig.get("groups_served"),
+            "groups_served":       _clean(net_sig.get("groups_served")),
         })
 
     if not rows:
