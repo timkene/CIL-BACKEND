@@ -152,6 +152,27 @@ def save_results(scan_month: str, results: list) -> int:
     if not rows:
         return 0
 
+    # Final safety: json roundtrip to eliminate any remaining NaN/Inf/Decimal types
+    import json as _json, re as _re
+    from decimal import Decimal as _Decimal
+
+    def _jdefault(o):
+        if isinstance(o, _Decimal):
+            try: return float(o)
+            except Exception: return None
+        try:
+            import numpy as np
+            if isinstance(o, (np.floating, np.integer, np.bool_)):
+                return o.item()
+        except ImportError:
+            pass
+        return str(o)
+
+    _raw = _json.dumps(rows, default=_jdefault, allow_nan=True)
+    _raw = _re.sub(r'\bNaN\b', 'null', _raw)
+    _raw = _re.sub(r'\b-?Infinity\b', 'null', _raw)
+    rows = _json.loads(_raw)
+
     # Batch insert in chunks of 100
     for i in range(0, len(rows), 100):
         sb.table(TABLE).insert(rows[i:i+100]).execute()
