@@ -85,6 +85,14 @@ def delete_previous_scan(scan_month: str) -> None:
     print(f"  Cleared previous scan data for {scan_month}")
 
 
+def _clean(v):
+    """Convert NaN/Inf floats to None so JSON serialization doesn't fail."""
+    import math
+    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+        return None
+    return v
+
+
 def save_results(scan_month: str, results: list) -> int:
     """Insert scored providers into Supabase. Returns count saved."""
     rows = []
@@ -108,16 +116,16 @@ def save_results(scan_month: str, results: list) -> int:
             "total_score":         r.get("total_score"),
             "max_score":           r.get("max_score", 10),
             "alert_status":        alert,
-            "total_cost":          raw.get("total_cost"),
+            "total_cost":          _clean(raw.get("total_cost")),
             "unique_enrollees":    raw.get("unique_enrollees"),
-            "cpe":                 raw.get("cpe"),
-            "cpv":                 raw.get("cpv"),
-            "vpe":                 raw.get("vpe"),
-            "drug_ratio_pct":      raw.get("drug_ratio_pct"),
-            "dx_repeat_pct":       metric_map.get("Dx Repeat Rate"),
-            "short_interval_pct":  metric_map.get("Short Interval"),
+            "cpe":                 _clean(raw.get("cpe")),
+            "cpv":                 _clean(raw.get("cpv")),
+            "vpe":                 _clean(raw.get("vpe")),
+            "drug_ratio_pct":      _clean(raw.get("drug_ratio_pct")),
+            "dx_repeat_pct":       _clean(metric_map.get("Dx Repeat Rate")),
+            "short_interval_pct":  _clean(metric_map.get("Short Interval")),
             "network_signal":      net_sig.get("network_signal"),
-            "cpe_ratio":           net_sig.get("cpe_ratio"),
+            "cpe_ratio":           _clean(net_sig.get("cpe_ratio")),
             "groups_served":       net_sig.get("groups_served"),
         })
 
