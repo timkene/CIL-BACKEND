@@ -14,7 +14,7 @@ Set env vars or use .env:
 """
 
 import os, sys, json, time, traceback
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 # ── allow running from project root ─────────────────────────────────────────
@@ -178,6 +178,7 @@ def upsert_summary(group_id, group_name, start_date, end_date, result=None, erro
         "group_name": group_name,
         "start_date": str(start_date),
         "end_date":   str(end_date),
+        "computed_at": datetime.now(timezone.utc).isoformat(),
     }
     if error:
         row["had_error"]      = True
