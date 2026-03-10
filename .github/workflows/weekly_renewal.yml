@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install duckdb supabase python-dateutil python-dotenv anthropic reportlab pandas
+          pip install "duckdb==1.4.0" supabase python-dateutil python-dotenv anthropic reportlab pandas
 
       - name: Generate renewal PDFs
         env:
