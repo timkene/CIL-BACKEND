@@ -134,7 +134,7 @@ SELECT
     gp.individualprice,
     gp.familyprice
 FROM "{SCHEMA}"."MEMBER_PROVIDER" mp
-JOIN "{SCHEMA}"."MEMBERS"      m   ON mp.memberid = m.memberid
+JOIN "{SCHEMA}"."MEMBERS"      m   ON CAST(mp.memberid AS VARCHAR) = m.memberid
 JOIN "{SCHEMA}"."MEMBER"       mem ON mp.memberid = mem.memberid
 JOIN "{SCHEMA}"."MEMBER_PLANS" mpl ON mp.memberid = mpl.memberid
                                    AND mpl.iscurrent = TRUE
@@ -174,7 +174,7 @@ LEFT JOIN (
         m2.enrollee_id,
         mp2.providerid  AS mapped_providerid
     FROM "{SCHEMA}"."MEMBER_PROVIDER" mp2
-    JOIN "{SCHEMA}"."MEMBERS" m2 ON mp2.memberid = m2.memberid
+    JOIN "{SCHEMA}"."MEMBERS" m2 ON CAST(mp2.memberid AS VARCHAR) = m2.memberid
     WHERE mp2.iscurrent = TRUE
 ) mp_sub ON UPPER(cd.enrollee_id) = UPPER(mp_sub.enrollee_id)
 LEFT JOIN "{SCHEMA}"."PROVIDERS" p_mapped
