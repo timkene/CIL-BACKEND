@@ -7,7 +7,7 @@ Routes
 ------
 GET /enrollee/{enrollee_id}
     Full profile: mapped provider, plan details, wrong-provider claims.
-    
+
 GET /enrollee/{enrollee_id}/member-provider
     Fold 1 — MEMBER_PROVIDER table only.
     Returns the iscurrent=TRUE mapped provider + plan info.
@@ -309,16 +309,12 @@ def health():
 
 
 @app.get(
-    "/enrollee/{enrollee_id}/member-provider",
+    "/enrollee/{enrollee_id:path}/member-provider",
     response_model=EnrolleeMemberProviderResult,
     summary="Fold 1 — Mapped provider & plan info from MEMBER_PROVIDER",
     tags=["Fold 1 — Member Provider"],
 )
 def get_member_provider(enrollee_id: str):
-    """
-    Returns the enrollee's iscurrent=TRUE mapped provider plus their plan details.
-    This is the first fold — pure MEMBER_PROVIDER table lookup.
-    """
     conn = get_conn()
     try:
         rows = conn.execute(MEMBER_PROVIDER_SQL, [enrollee_id]).fetchall()
@@ -336,22 +332,15 @@ def get_member_provider(enrollee_id: str):
 
 
 @app.get(
-    "/enrollee/{enrollee_id}/claims-check",
+    "/enrollee/{enrollee_id:path}/claims-check",
     response_model=List[WrongProviderClaim],
     summary="Fold 2 — Claims cross-check against mapped provider",
     tags=["Fold 2 — Claims Check"],
 )
 def get_claims_check(
     enrollee_id: str,
-    wrong_only: bool = Query(
-        False, description="If true, return only wrong-provider claims"
-    ),
+    wrong_only: bool = Query(False, description="If true, return only wrong-provider claims"),
 ):
-    """
-    Returns all claims for the enrollee with a flag for each indicating whether
-    the actual provider matches the mapped provider.
-    Set wrong_only=true to filter to violations only.
-    """
     conn = get_conn()
     try:
         rows = conn.execute(CLAIMS_CHECK_SQL, [enrollee_id]).fetchall()
@@ -374,23 +363,12 @@ def get_claims_check(
 
 
 @app.get(
-    "/enrollee/{enrollee_id}",
+    "/enrollee/{enrollee_id:path}",
     response_model=EnrolleeFullCheck,
     summary="Full check — both folds combined",
     tags=["Full Check"],
 )
 def get_enrollee_full_check(enrollee_id: str):
-    """
-    Runs both folds for the given enrollee:
-    - Fold 1: MEMBER_PROVIDER mapped provider + plan info
-    - Fold 2: CLAIMS cross-check — all claims flagged for wrong-provider use
-
-    Verdict:
-    - CLEAN             → all claims at mapped provider
-    - WRONG_PROVIDER    → claims found at non-mapped provider(s)
-    - NO_MAPPING        → member has claims but no provider mapping on record
-    - NOT_FOUND         → enrollee not found in any table
-    """
     conn = get_conn()
     try:
         mp_rows    = conn.execute(MEMBER_PROVIDER_SQL, [enrollee_id]).fetchall()
@@ -399,16 +377,12 @@ def get_enrollee_full_check(enrollee_id: str):
         conn.close()
 
     if not mp_rows and not claim_rows:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Enrollee '{enrollee_id}' not found.",
-        )
+        raise HTTPException(status_code=404, detail=f"Enrollee '{enrollee_id}' not found.")
 
-    # ── Fold 1 ────────────────────────────────────────────────────────────────
-    mapped_provider = None
-    plan            = None
-    full_name       = ""
-    member_id       = 0
+    mapped_provider   = None
+    plan              = None
+    full_name         = ""
+    member_id         = 0
     mapped_providerid = None
 
     if mp_rows:
@@ -416,17 +390,14 @@ def get_enrollee_full_check(enrollee_id: str):
         mapped_provider = mp_result.mapped_provider
         plan            = mp_result.plan
         full_name       = mp_result.full_name
-    
-    # If no mapping, try to get name from MEMBER table via claims
-    if not full_name and claim_rows:
-        full_name = claim_rows[0][0]  # enrollee_id as fallback
 
-    # ── Fold 2 ────────────────────────────────────────────────────────────────
+    if not full_name and claim_rows:
+        full_name = claim_rows[0][0]
+
     wrong_claims, total_wrong_spend, total_spend, wrong_count, total_count = (
         _build_wrong_claims(claim_rows, mapped_providerid)
     )
 
-    # ── Verdict ───────────────────────────────────────────────────────────────
     if not mp_rows and not claim_rows:
         verdict = "NOT_FOUND"
     elif not mp_rows:
@@ -458,10 +429,6 @@ def get_enrollee_full_check(enrollee_id: str):
     tags=["Full Check"],
 )
 def bulk_check(request: BulkCheckRequest):
-    """
-    Run full check (both folds) for multiple enrollees in one call.
-    Returns a list of results, skipping NOT_FOUND enrollees.
-    """
     results = []
     conn = get_conn()
     try:
@@ -488,12 +455,7 @@ def bulk_check(request: BulkCheckRequest):
                 _build_wrong_claims(claim_rows, mapped_providerid)
             )
 
-            if not mp_rows:
-                verdict = "NO_MAPPING"
-            elif wrong_count > 0:
-                verdict = "WRONG_PROVIDER"
-            else:
-                verdict = "CLEAN"
+            verdict = "NO_MAPPING" if not mp_rows else ("WRONG_PROVIDER" if wrong_count > 0 else "CLEAN")
 
             results.append(EnrolleeFullCheck(
                 enrollee_id=eid,
@@ -522,18 +484,10 @@ def bulk_check(request: BulkCheckRequest):
 )
 def get_group_wrong_providers(
     group_name: str,
-    wrong_only: bool = Query(
-        True, description="If true (default), return only enrollees with violations"
-    ),
+    wrong_only: bool = Query(True, description="If true (default), return only enrollees with violations"),
 ):
-    """
-    Scans ALL enrollees belonging to a group and returns those with
-    wrong-provider claims. By default filters to violations only.
-    Set wrong_only=false to return all enrollees in the group.
-    """
     conn = get_conn()
     try:
-        # Get all enrollee_ids for this group via MEMBER + MEMBERS join
         group_sql = f"""
         SELECT DISTINCT m.enrollee_id
         FROM "{SCHEMA}"."MEMBERS" m
@@ -578,12 +532,7 @@ def get_group_wrong_providers(
                 _build_wrong_claims(claim_rows, mapped_providerid)
             )
 
-            if not mp_rows:
-                verdict = "NO_MAPPING"
-            elif wrong_count > 0:
-                verdict = "WRONG_PROVIDER"
-            else:
-                verdict = "CLEAN"
+            verdict = "NO_MAPPING" if not mp_rows else ("WRONG_PROVIDER" if wrong_count > 0 else "CLEAN")
 
             if wrong_only and verdict not in ("WRONG_PROVIDER", "NO_MAPPING"):
                 continue
