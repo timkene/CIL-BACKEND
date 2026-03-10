@@ -144,7 +144,7 @@ LEFT JOIN "{SCHEMA}"."GROUP_PLANS" gp
     AND gp.iscurrent = TRUE
     AND gp.groupid = mem.groupid
 LEFT JOIN "{SCHEMA}"."PROVIDERS" p
-    ON TRY_CAST(mp.providerid AS BIGINT) = TRY_CAST(p.providerid AS BIGINT)
+    ON TRY_CAST(mp.providerid AS BIGINT) = TRY_CAST(p.protariffid AS BIGINT)
 WHERE mp.iscurrent = TRUE
   AND UPPER(m.enrollee_id) = UPPER(?)
 """
@@ -178,7 +178,7 @@ LEFT JOIN (
     WHERE mp2.iscurrent = TRUE
 ) mp_sub ON UPPER(cd.enrollee_id) = UPPER(mp_sub.enrollee_id)
 LEFT JOIN "{SCHEMA}"."PROVIDERS" p_mapped
-    ON TRY_CAST(mp_sub.mapped_providerid AS BIGINT) = TRY_CAST(p_mapped.providerid AS BIGINT)
+    ON TRY_CAST(mp_sub.mapped_providerid AS BIGINT) = TRY_CAST(p_mapped.protariffid AS BIGINT)
 WHERE UPPER(cd.enrollee_id) = UPPER(?)
 ORDER BY encounter_date DESC
 """
