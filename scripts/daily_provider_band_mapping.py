@@ -180,10 +180,11 @@ WHERE m.iscurrent = TRUE
 CLAIMS_3M_SQL = f"""
 SELECT
     cd.enrollee_id,
-    cd.nhisproviderid                       AS claim_providerid,
-    p.providername                          AS claim_provider_name,
-    p.bands                                 AS claim_provider_band,
-    CAST(cd.encounterdatefrom AS DATE)      AS encounter_date
+    cd.nhisproviderid                           AS claim_providerid,
+    p.providername                              AS claim_provider_name,
+    p.bands                                     AS claim_provider_band,
+    CAST(cd.encounterdatefrom AS DATE)          AS encounter_date,
+    CAST(CAST(cd.panumber AS BIGINT) AS VARCHAR) AS pa_number
 FROM "{SCHEMA}"."CLAIMS DATA" cd
 JOIN "{SCHEMA}"."PROVIDERS" p
     ON TRY_CAST(cd.nhisproviderid AS BIGINT) = TRY_CAST(p.providerid AS BIGINT)
@@ -215,7 +216,7 @@ def run_scan() -> tuple[int, int]:
         print("  Fetching last-3-months claims…")
         claim_cols = [
             "enrollee_id", "claim_providerid",
-            "claim_provider_name", "claim_provider_band", "encounter_date",
+            "claim_provider_name", "claim_provider_band", "encounter_date", "pa_number",
         ]
         claims_by_enrollee: dict[str, list] = defaultdict(list)
         for row in conn.execute(CLAIMS_3M_SQL).fetchall():
@@ -263,10 +264,17 @@ def run_scan() -> tuple[int, int]:
 
         # ── Tab 2: Inappropriate Visits ───────────────────────────────────────
         enrollee_claims = claims_by_enrollee.get(eid.upper(), [])
-        higher_visits = [
+        higher_rows = [
             c for c in enrollee_claims
             if is_higher_band(_normalise_band(c["claim_provider_band"] or ""), allowed)
         ]
+        # Deduplicate by PA number — one PA = one visit regardless of procedure rows
+        seen_pa: dict[str, dict] = {}
+        for c in higher_rows:
+            pa = c["pa_number"] or f"no_pa_{c['encounter_date']}_{c['claim_providerid']}"
+            if pa not in seen_pa:
+                seen_pa[pa] = c
+        higher_visits = list(seen_pa.values())
         if len(higher_visits) > 2:
             providers_visited = sorted({
                 c["claim_provider_name"]
