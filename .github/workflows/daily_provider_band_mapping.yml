@@ -1,0 +1,32 @@
+name: Daily Provider Band Mapping Scan
+
+on:
+  schedule:
+    # 12:00 AM WAT (UTC+1) = 23:00 UTC previous day
+    - cron: '0 23 * * *'
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install "duckdb==1.4.0" supabase python-dotenv
+
+      - name: Run provider band mapping scan
+        env:
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          SUPABASE_URL:     ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:     ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/daily_provider_band_mapping.py
