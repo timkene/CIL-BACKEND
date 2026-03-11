@@ -290,6 +290,10 @@ def run_scan() -> tuple[int, int]:
                 "scanned_at":              scanned_at,
             })
 
+    # Deduplicate by enrollee_id (keep last seen — handles members with multiple plans)
+    mapping_flags = list({r["enrollee_id"]: r for r in mapping_flags}.values())
+    visit_flags   = list({r["enrollee_id"]: r for r in visit_flags}.values())
+
     print(f"  → {len(mapping_flags)} inappropriate mapping flags")
     print(f"  → {len(visit_flags)} inappropriate visit flags")
 
