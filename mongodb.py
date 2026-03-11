@@ -50,7 +50,7 @@ def fetch_collections_as_dataframes(
         
         for coll_name in collections:
             print(f"Fetching {coll_name}...")
-        coll = db[coll_name]
+            coll = db[coll_name]
 
             # Get all documents from collection
             cursor = coll.find({})
@@ -678,7 +678,7 @@ def search_nhisprocedures(search_terms: list, database: str = 'admin', client: O
     
     finally:
         if close_client:
-client.close()
+            client.close()
 
 
 # Main execution - can be called directly or imported

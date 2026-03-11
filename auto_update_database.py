@@ -3,6 +3,15 @@
 Auto-Update Database Script
 Automatically refreshes the AI DRIVEN DATA database with latest data from source systems
 """
+# Load .env so MOTHERDUCK_TOKEN is set when running from CLI (no need to export manually)
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path
+    _env = Path(__file__).resolve().parent / ".env"
+    if _env.exists():
+        load_dotenv(_env)
+except ImportError:
+    pass
 
 import duckdb
 import pandas as pd
@@ -85,6 +94,11 @@ class DatabaseUpdater:
         
         # Connect to MotherDuck if enabled
         if self.update_motherduck:
+            if not self.MOTHERDUCK_TOKEN or not self.MOTHERDUCK_TOKEN.strip():
+                logger.warning(
+                    "⚠️ MOTHERDUCK_TOKEN (or MOTHERDUCK_PAT) not set. "
+                    "Add it to a .env file in the project root, or run: export MOTHERDUCK_TOKEN=your_token"
+                )
             try:
                 self.md_conn = duckdb.connect(f'md:?motherduck_token={self.MOTHERDUCK_TOKEN}')
                 self.md_conn.execute(f"CREATE DATABASE IF NOT EXISTS {self.MOTHERDUCK_DB}")
@@ -1322,6 +1336,44 @@ class DatabaseUpdater:
                     logger.info(f"  ✅ [MOTHERDUCK] EXPENSE_AND_COMMISSION combined: {count:,} rows (synced from local)")
                 except Exception as e:
                     logger.warning(f"  ⚠️ [MOTHERDUCK] Could not sync EXPENSE_AND_COMMISSION from local: {e}")
+            
+            # Client dashboard summary (for API to read from; avoids 502 on slow hosts)
+            try:
+                from api.routes.clients import populate_client_dashboard_summary_table
+                logger.info("📊 Populating CLIENT_DASHBOARD_SUMMARY...")
+                if self.motherduck_only and self.update_motherduck and self.md_conn:
+                    # Render cron etc.: populate writes directly to MotherDuck via get_db_connection()
+                    success, rows, err = populate_client_dashboard_summary_table()
+                    if success:
+                        logger.info(f"  ✅ [MOTHERDUCK] CLIENT_DASHBOARD_SUMMARY: {rows:,} rows")
+                    else:
+                        logger.warning(f"  ⚠️ CLIENT_DASHBOARD_SUMMARY populate failed: {err}")
+                elif not self.motherduck_only and self.conn:
+                    success, rows, err = populate_client_dashboard_summary_table()
+                    if success:
+                        logger.info(f"  ✅ [LOCAL] CLIENT_DASHBOARD_SUMMARY: {rows:,} rows")
+                        if self.update_motherduck and self.md_conn:
+                            try:
+                                schema = self.SCHEMA_NAME
+                                try:
+                                    self.md_conn.execute("DETACH local_db")
+                                except Exception:
+                                    pass
+                                self.md_conn.execute(f"ATTACH '{self.db_path}' AS local_db (READ_ONLY)")
+                                self.md_conn.execute(f'DROP TABLE IF EXISTS "{schema}"."CLIENT_DASHBOARD_SUMMARY"')
+                                self.md_conn.execute(f'CREATE TABLE "{schema}"."CLIENT_DASHBOARD_SUMMARY" AS SELECT * FROM local_db."{schema}"."CLIENT_DASHBOARD_SUMMARY"')
+                                self.md_conn.execute("DETACH local_db")
+                                count = self.md_conn.execute(f'SELECT COUNT(*) FROM "{schema}"."CLIENT_DASHBOARD_SUMMARY"').fetchone()[0]
+                                logger.info(f"  ✅ [MOTHERDUCK] CLIENT_DASHBOARD_SUMMARY: {count:,} rows")
+                            except Exception as e:
+                                logger.error(f"  ❌ [MOTHERDUCK] Failed to sync CLIENT_DASHBOARD_SUMMARY: {e}")
+                                self.update_stats['motherduck_errors'].append(f"CLIENT_DASHBOARD_SUMMARY: {e}")
+                    else:
+                        logger.warning(f"  ⚠️ CLIENT_DASHBOARD_SUMMARY populate failed: {err}")
+                else:
+                    logger.debug("  ⏭️ CLIENT_DASHBOARD_SUMMARY skipped (no conn)")
+            except Exception as e:
+                logger.warning(f"  ⚠️ CLIENT_DASHBOARD_SUMMARY skipped: {e}")
             
             logger.info("✅ All derived tables updated successfully!")
             return True
