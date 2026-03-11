@@ -108,9 +108,10 @@ def get_allowed_bands(individual_price, family_price) -> set[str] | None:
     """
     Return the set of allowed band letters for a plan.
     Returns None when no price is available (member skipped).
-    Individual price takes priority; family price used only when individual is None.
+    Individual price takes priority; family price used only when individual is None or 0
+    (0 means price not set, not a free plan).
     """
-    if individual_price is not None:
+    if individual_price is not None and float(individual_price) > 0:
         p = float(individual_price)
         if p <= 81_779:
             return {"D"}
