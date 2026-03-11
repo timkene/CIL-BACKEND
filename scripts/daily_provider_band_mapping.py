@@ -185,7 +185,7 @@ SELECT
     p.providername                              AS claim_provider_name,
     p.bands                                     AS claim_provider_band,
     CAST(cd.encounterdatefrom AS DATE)          AS encounter_date,
-    CAST(CAST(cd.panumber AS BIGINT) AS VARCHAR) AS pa_number
+    CAST(cd.panumber AS VARCHAR)                 AS pa_number
 FROM "{SCHEMA}"."CLAIMS DATA" cd
 JOIN "{SCHEMA}"."PROVIDERS" p
     ON TRY_CAST(cd.nhisproviderid AS BIGINT) = TRY_CAST(p.providerid AS BIGINT)
