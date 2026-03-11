@@ -163,8 +163,7 @@ SELECT
     pl.planname,
     pl.plancode,
     gp.individualprice,
-    gp.familyprice,
-    CAST(gc.enddate AS DATE)               AS contract_end_date
+    gp.familyprice
 FROM "{SCHEMA}"."MEMBERS" m
 JOIN "{SCHEMA}"."MEMBER"          mem ON TRY_CAST(m.memberid AS BIGINT) = mem.memberid
 JOIN "{SCHEMA}"."MEMBER_PROVIDER" mp  ON CAST(mp.memberid AS VARCHAR) = m.memberid
@@ -176,8 +175,6 @@ LEFT JOIN "{SCHEMA}"."GROUP_PLANS" gp ON pl.planid = gp.planid
                                       AND gp.iscurrent = TRUE
                                       AND gp.groupid = mem.groupid
 LEFT JOIN "{SCHEMA}"."PROVIDERS"   p  ON TRY_CAST(mp.providerid AS BIGINT) = TRY_CAST(p.protariffid AS BIGINT)
-LEFT JOIN "{SCHEMA}"."GROUP_CONTRACT" gc ON mem.groupid = gc.groupid
-                                        AND gc.iscurrent = 1
 WHERE m.iscurrent = TRUE
 """
 
@@ -209,7 +206,6 @@ def run_scan() -> tuple[int, int]:
             "enrollee_id", "fullname", "mapped_providerid",
             "mapped_provider_name", "mapped_provider_band",
             "planname", "plancode", "individualprice", "familyprice",
-            "contract_end_date",
         ]
         members = [
             dict(zip(member_cols, row))
@@ -264,7 +260,6 @@ def run_scan() -> tuple[int, int]:
                 "flag_reason":          (
                     f"Mapped to Band {mapped_band} but plan allows only Band {allowed_str}"
                 ),
-                "contract_end_date":    str(m["contract_end_date"]) if m["contract_end_date"] else None,
                 "scanned_at":           scanned_at,
             })
 
@@ -301,7 +296,6 @@ def run_scan() -> tuple[int, int]:
                 "visit_count_higher_band": len(higher_visits),
                 "last_visit_date":         str(last_visit) if last_visit else None,
                 "higher_band_providers":   json.dumps(providers_visited),
-                "contract_end_date":       str(m["contract_end_date"]) if m["contract_end_date"] else None,
                 "scanned_at":              scanned_at,
             })
 
