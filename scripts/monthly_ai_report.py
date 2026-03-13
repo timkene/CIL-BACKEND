@@ -48,7 +48,7 @@ def collect_data(con):
     """Run all analytical queries and return a structured dict of findings."""
     data = {}
 
-    print("  [1/12] PA overview...")
+    print("  [1/15] PA overview...")
     rows = con.execute(f"""
         SELECT
             YEAR(CAST(requestdate AS DATE))  AS yr,
@@ -70,7 +70,7 @@ def collect_data(con):
         for r in rows
     ]
 
-    print("  [2/12] PA by benefit code...")
+    print("  [2/15] PA by benefit code...")
     rows = con.execute(f"""
         SELECT
             p.benefitcode,
@@ -90,7 +90,7 @@ def collect_data(con):
         for r in rows
     ]
 
-    print("  [3/12] PA by provider (top 30)...")
+    print("  [3/15] PA by provider (top 30)...")
     rows = con.execute(f"""
         SELECT
             p.providerid,
@@ -126,7 +126,7 @@ def collect_data(con):
         for pid, v in sorted_provs
     ]
 
-    print("  [4/12] PA by client group (top 30)...")
+    print("  [4/15] PA by client group (top 30)...")
     rows = con.execute(f"""
         SELECT
             groupname,
@@ -155,7 +155,7 @@ def collect_data(con):
         for g, v in sorted_grps
     ]
 
-    print("  [5/12] PA diagnoses (top 50 by frequency)...")
+    print("  [5/15] PA diagnoses (top 50 by frequency)...")
     rows = con.execute(f"""
         SELECT
             td.code,
@@ -172,7 +172,7 @@ def collect_data(con):
         for r in rows
     ]
 
-    print("  [6/12] Claims multi-year overview...")
+    print("  [6/15] Claims multi-year overview...")
     rows = con.execute(f"""
         SELECT
             YEAR(encounterdatefrom)            AS yr,
@@ -197,7 +197,7 @@ def collect_data(con):
         for r in rows
     ]
 
-    print("  [7/12] Claims by diagnosis (top 40, with names)...")
+    print("  [7/15] Claims by diagnosis (top 40, with names)...")
     rows = con.execute(f"""
         SELECT
             cd.diagnosiscode,
@@ -226,7 +226,7 @@ def collect_data(con):
         for code, v in sorted_dx
     ]
 
-    print("  [8/12] Claims by procedure (top 30)...")
+    print("  [8/15] Claims by procedure (top 30)...")
     rows = con.execute(f"""
         SELECT
             cd.code,
@@ -253,7 +253,7 @@ def collect_data(con):
         for code, v in sorted_proc
     ]
 
-    print("  [9/12] Claims by provider (top 30, multi-year)...")
+    print("  [9/15] Claims by provider (top 30, multi-year)...")
     rows = con.execute(f"""
         SELECT
             cd.nhisproviderid,
@@ -285,7 +285,7 @@ def collect_data(con):
         for pid, v in sorted_cprov
     ]
 
-    print("  [10/12] High utiliser enrollees...")
+    print("  [10/15] High utiliser enrollees...")
     rows = con.execute(f"""
         SELECT
             cd.enrollee_id,
@@ -314,7 +314,7 @@ def collect_data(con):
         for r in rows
     ]
 
-    print("  [11/12] Inpatient deep dive...")
+    print("  [11/15] Inpatient deep dive...")
     rows = con.execute(f"""
         SELECT
             YEAR(cd.encounterdatefrom) AS yr,
@@ -341,7 +341,7 @@ def collect_data(con):
         for dx, v in sorted_ip
     ]
 
-    print("  [12/12] Seasonal & monthly claims patterns...")
+    print("  [12/15] Seasonal & monthly claims patterns...")
     rows = con.execute(f"""
         SELECT
             YEAR(encounterdatefrom)  AS yr,
@@ -355,8 +355,217 @@ def collect_data(con):
         GROUP BY 1, 2 ORDER BY 1, 2
     """).fetchall()
     data["claims_monthly"] = [
-        {"year": r[0], "month": MONTH_LABELS[r[1]-1], "claims": r[1],
+        {"year": r[0], "month": MONTH_LABELS[r[1]-1],
          "claim_count": r[2], "approved": int(r[3] or 0), "enrollees": r[4]}
+        for r in rows
+    ]
+
+    # ── NEW: PA-to-Claims vetting gap ─────────────────────────────────────────
+    print("  [13/15] PA-to-Claims vetting gap (authorised vs approved)...")
+    rows = con.execute(f"""
+        WITH pa_agg AS (
+            SELECT
+                CAST(panumber AS VARCHAR)       AS pa_num,
+                CAST(pa.providerid AS VARCHAR)  AS pa_provid,
+                COALESCE(pr.providername, '(Unknown)') AS provider_name,
+                pa.groupname,
+                ROUND(SUM(pa.granted), 0)       AS pa_granted
+            FROM "{S}"."PA DATA" pa
+            LEFT JOIN "{S}"."PROVIDERS" pr
+                ON TRY_CAST(pa.providerid AS BIGINT) = TRY_CAST(pr.providerid AS BIGINT)
+            WHERE CAST(pa.requestdate AS DATE) >= DATE '2025-01-01'
+              AND pa.panumber IS NOT NULL
+            GROUP BY 1, 2, 3, 4
+        ),
+        cl_agg AS (
+            SELECT
+                CAST(cd.panumber AS VARCHAR)    AS pa_num,
+                ROUND(SUM(cd.approvedamount), 0) AS cl_approved,
+                ROUND(SUM(cd.deniedamount), 0)   AS cl_denied
+            FROM "{S}"."CLAIMS DATA" cd
+            WHERE cd.panumber IS NOT NULL
+              AND cd.approvedamount > 0
+            GROUP BY 1
+        )
+        SELECT
+            pa.pa_provid,
+            pa.provider_name,
+            pa.groupname,
+            COUNT(*)                      AS matched_panumbers,
+            ROUND(SUM(pa.pa_granted), 0)  AS total_pa_granted,
+            ROUND(SUM(cl.cl_approved), 0) AS total_cl_approved,
+            ROUND(SUM(cl.cl_denied), 0)   AS total_cl_denied,
+            ROUND(
+                (SUM(pa.pa_granted) - SUM(cl.cl_approved))
+                / NULLIF(SUM(pa.pa_granted), 0) * 100
+            , 1) AS vetting_reduction_pct
+        FROM pa_agg pa
+        JOIN cl_agg cl ON pa.pa_num = cl.pa_num
+        GROUP BY 1, 2, 3
+        ORDER BY total_pa_granted DESC
+        LIMIT 30
+    """).fetchall()
+    data["pa_claims_gap"] = [
+        {"provider_id": r[0], "provider_name": r[1], "group": r[2] or "—",
+         "matched_panumbers": r[3],
+         "pa_granted": int(r[4] or 0), "cl_approved": int(r[5] or 0), "cl_denied": int(r[6] or 0),
+         "vetting_reduction_pct": float(r[7] or 0)}
+        for r in rows
+    ]
+
+    # Overall vetting summary (year-level)
+    rows2 = con.execute(f"""
+        WITH pa_agg AS (
+            SELECT CAST(panumber AS VARCHAR) AS pa_num,
+                   YEAR(CAST(requestdate AS DATE)) AS yr,
+                   ROUND(SUM(granted), 0) AS pa_granted
+            FROM "{S}"."PA DATA"
+            WHERE panumber IS NOT NULL AND CAST(requestdate AS DATE) >= DATE '2025-01-01'
+            GROUP BY 1, 2
+        ),
+        cl_agg AS (
+            SELECT CAST(panumber AS VARCHAR) AS pa_num,
+                   ROUND(SUM(approvedamount), 0) AS cl_approved
+            FROM "{S}"."CLAIMS DATA"
+            WHERE panumber IS NOT NULL AND approvedamount > 0
+            GROUP BY 1
+        )
+        SELECT
+            pa.yr,
+            COUNT(*)                      AS matched_panumbers,
+            ROUND(SUM(pa.pa_granted), 0)  AS total_pa_granted,
+            ROUND(SUM(cl.cl_approved), 0) AS total_cl_approved,
+            ROUND((SUM(pa.pa_granted) - SUM(cl.cl_approved))
+                  / NULLIF(SUM(pa.pa_granted), 0) * 100, 1) AS vetting_reduction_pct
+        FROM pa_agg pa JOIN cl_agg cl ON pa.pa_num = cl.pa_num
+        GROUP BY 1 ORDER BY 1
+    """).fetchall()
+    data["pa_claims_gap_summary"] = [
+        {"year": r[0], "matched_panumbers": r[1],
+         "pa_granted": int(r[2] or 0), "cl_approved": int(r[3] or 0),
+         "vetted_away": int((r[2] or 0) - (r[3] or 0)),
+         "vetting_reduction_pct": float(r[4] or 0)}
+        for r in rows2
+    ]
+
+    # ── NEW: No-auth claims (NI Auth — panumber IS NULL) ─────────────────────
+    print("  [14/15] No-auth (NI Auth) claims analysis...")
+    rows = con.execute(f"""
+        SELECT
+            YEAR(encounterdatefrom)  AS yr,
+            MONTH(encounterdatefrom) AS mo,
+            COUNT(DISTINCT claimnumber)   AS claim_count,
+            ROUND(SUM(approvedamount), 0) AS total_approved,
+            COUNT(DISTINCT enrollee_id)   AS unique_enrollees,
+            SUM(CASE WHEN isinpatient THEN 1 ELSE 0 END) AS inpatient_count
+        FROM "{S}"."CLAIMS DATA"
+        WHERE panumber IS NULL
+          AND approvedamount > 0
+          AND encounterdatefrom >= DATE '2022-01-01'
+        GROUP BY 1, 2 ORDER BY 1, 2
+    """).fetchall()
+    data["noauth_monthly"] = [
+        {"year": r[0], "month": MONTH_LABELS[r[1]-1],
+         "claim_count": r[2], "approved": int(r[3] or 0),
+         "enrollees": r[4], "inpatient": r[5]}
+        for r in rows
+    ]
+
+    rows = con.execute(f"""
+        SELECT
+            cd.nhisproviderid,
+            COALESCE(pr.providername, '(Unknown)') AS provider_name,
+            pr.bands,
+            YEAR(cd.encounterdatefrom) AS yr,
+            COUNT(DISTINCT cd.claimnumber)   AS claim_count,
+            ROUND(SUM(cd.approvedamount), 0) AS total_approved
+        FROM "{S}"."CLAIMS DATA" cd
+        LEFT JOIN "{S}"."PROVIDERS" pr
+            ON TRY_CAST(cd.nhisproviderid AS BIGINT) = TRY_CAST(pr.providerid AS BIGINT)
+        WHERE cd.panumber IS NULL
+          AND cd.approvedamount > 0
+          AND cd.encounterdatefrom >= DATE '2025-01-01'
+        GROUP BY 1, 2, 3, 4
+        ORDER BY total_approved DESC LIMIT 30
+    """).fetchall()
+    noauth_prov = defaultdict(lambda: {"name": "", "band": "", "years": {}})
+    for r in rows:
+        noauth_prov[r[0]]["name"] = r[1]
+        noauth_prov[r[0]]["band"] = r[2] or "—"
+        noauth_prov[r[0]]["years"][str(r[3])] = {"claims": r[4], "approved": int(r[5] or 0)}
+    data["noauth_by_provider"] = [
+        {"provider_id": pid, "name": v["name"], "band": v["band"], "years": v["years"]}
+        for pid, v in sorted(noauth_prov.items(),
+                             key=lambda x: sum(y["approved"] for y in x[1]["years"].values()),
+                             reverse=True)[:20]
+    ]
+
+    rows = con.execute(f"""
+        SELECT
+            cd.diagnosiscode,
+            COALESCE(d.diagnosisdesc, cd.diagnosiscode) AS diagnosis_name,
+            COUNT(DISTINCT cd.claimnumber)              AS claim_count,
+            ROUND(SUM(cd.approvedamount), 0)            AS total_approved
+        FROM "{S}"."CLAIMS DATA" cd
+        LEFT JOIN "{S}"."DIAGNOSIS" d ON cd.diagnosiscode = d.diagnosiscode
+        WHERE cd.panumber IS NULL
+          AND cd.approvedamount > 0
+          AND cd.encounterdatefrom >= DATE '2025-01-01'
+          AND cd.diagnosiscode IS NOT NULL AND cd.diagnosiscode != ''
+        GROUP BY 1, 2 ORDER BY total_approved DESC LIMIT 30
+    """).fetchall()
+    data["noauth_by_diagnosis"] = [
+        {"code": r[0], "name": r[1], "claim_count": r[2], "approved": int(r[3] or 0)}
+        for r in rows
+    ]
+
+    # ── NEW: Submission lag analysis ──────────────────────────────────────────
+    print("  [15/15] Submission lag (encounter → submission gap)...")
+    rows = con.execute(f"""
+        SELECT
+            YEAR(encounterdatefrom)   AS encounter_yr,
+            YEAR(datesubmitted)       AS submit_yr,
+            CASE
+                WHEN DATEDIFF('day', encounterdatefrom, datesubmitted) < 0    THEN 'invalid'
+                WHEN DATEDIFF('day', encounterdatefrom, datesubmitted) <= 30  THEN '0-30d'
+                WHEN DATEDIFF('day', encounterdatefrom, datesubmitted) <= 60  THEN '31-60d'
+                WHEN DATEDIFF('day', encounterdatefrom, datesubmitted) <= 90  THEN '61-90d'
+                WHEN DATEDIFF('day', encounterdatefrom, datesubmitted) <= 180 THEN '91-180d'
+                WHEN DATEDIFF('day', encounterdatefrom, datesubmitted) <= 365 THEN '181-365d'
+                ELSE '365d+'
+            END                        AS lag_bucket,
+            COUNT(DISTINCT claimnumber)   AS claim_count,
+            ROUND(SUM(approvedamount), 0) AS total_approved
+        FROM "{S}"."CLAIMS DATA"
+        WHERE encounterdatefrom >= DATE '2023-01-01'
+          AND datesubmitted IS NOT NULL
+          AND approvedamount > 0
+        GROUP BY 1, 2, 3
+        ORDER BY 1, 2, lag_bucket
+    """).fetchall()
+    data["submission_lag"] = [
+        {"encounter_yr": r[0], "submit_yr": r[1], "lag_bucket": r[2],
+         "claim_count": r[3], "approved": int(r[4] or 0)}
+        for r in rows
+    ]
+
+    # How much 2025 encounter liability is being submitted in 2026
+    rows = con.execute(f"""
+        SELECT
+            YEAR(datesubmitted) AS submit_yr,
+            COUNT(DISTINCT claimnumber)   AS claim_count,
+            ROUND(SUM(approvedamount), 0) AS total_approved,
+            ROUND(AVG(DATEDIFF('day', encounterdatefrom, datesubmitted)), 0) AS avg_lag_days
+        FROM "{S}"."CLAIMS DATA"
+        WHERE encounterdatefrom >= DATE '2025-01-01'
+          AND encounterdatefrom < DATE '2026-01-01'
+          AND datesubmitted IS NOT NULL
+          AND approvedamount > 0
+        GROUP BY 1 ORDER BY 1
+    """).fetchall()
+    data["lag_2025_encounters"] = [
+        {"submit_yr": r[0], "claim_count": r[1],
+         "total_approved": int(r[2] or 0), "avg_lag_days": int(r[3] or 0)}
         for r in rows
     ]
 
@@ -374,9 +583,43 @@ def build_prompt(data: dict) -> str:
     cl_25 = next((r for r in data["claims_yearly"] if r["year"] == 2025), {})
     cl_26 = next((r for r in data["claims_yearly"] if r["year"] == 2026), {})
 
+    # No-auth totals for prompt header
+    noauth_25 = sum(r["approved"] for r in data["noauth_monthly"] if r["year"] == 2025)
+    noauth_26 = sum(r["approved"] for r in data["noauth_monthly"] if r["year"] == 2026)
+    gap_summary = data.get("pa_claims_gap_summary", [])
+    gap_25 = next((r for r in gap_summary if r["year"] == 2025), {})
+    gap_26 = next((r for r in gap_summary if r["year"] == 2026), {})
+
     prompt = f"""You are a senior medical data analyst and actuary specialising in health insurance in Nigeria. You are analysing data for Clearline HMO (a Health Maintenance Organisation), covering their entire insured population.
 
 Today is {TODAY}. This is the monthly analytics report for {REPORT_LABEL}.
+
+---
+# DATA MODEL — CRITICAL CONTEXT (read carefully before analysis)
+
+## PA (Prior Authorisation) System
+- A **panumber** represents a single facility visit by one enrollee on one day. It is the unit of PA counting.
+- When a patient visits a hospital, the provider requests authorisation for care. Clearline HMO grants a **PA amount** (`granted`). This is the maximum liability Clearline has committed to for that visit.
+- One panumber = one visit. Multiple rows in PA DATA can share a panumber if the visit covers multiple services; they are deduplicated by panumber for counting.
+- PA data is available from 2025 onwards. It measures **disease burden** and **authorised liability**.
+
+## Claims (Vetting) System
+- Once care is delivered, the provider submits a claim. Clearline vets the claim against the PA.
+- **`approvedamount`** = what Clearline actually pays after vetting. This is always ≤ `granted` (Clearline can claw back).
+- **`deniedamount`** = what was refused/clawed back during vetting.
+- The **PA-to-Claims gap** (granted minus approved) = vetting effectiveness — how much Clearline saved by scrutinising claims.
+- Claims data is available from 2020 onwards.
+
+## Two Date Dimensions
+- **`encounterdatefrom`**: The date the patient was seen at the facility. Use this for **disease burden analysis** — it tells you when illness occurred.
+- **`datesubmitted`**: The date the provider billed Clearline. Use this for **cash flow analysis** — it tells you when Clearline faces payment pressure.
+- A 2025 encounter can be billed (submitted) in 2026. This creates **outstanding liability** — 2026 MLR is inflated by late-submitted 2025 claims.
+
+## No-Auth Claims (NI Auth)
+- Some claims have **no panumber** (`panumber IS NULL`). These are called "NI Auth" or no-auth claims.
+- Certain services (e.g. emergency presentations, some outpatient services) are allowed without prior authorisation.
+- No-auth claims represent **uncontrolled spend** — Clearline has no prior gate on these costs.
+- They are a separate liability pool from PA-authorised claims.
 
 ---
 # DATASET OVERVIEW
@@ -385,9 +628,17 @@ Today is {TODAY}. This is the monthly analytics report for {REPORT_LABEL}.
 - 2025: {pa_count_25:,} PAs totalling {fmt_m(pa_total_25)} granted
 - 2026 YTD: {pa_count_26:,} PAs totalling {fmt_m(pa_total_26)} granted
 
-**Claims Data:** Available from 2020 onwards (encounter date)
+**PA-to-Claims Vetting (matched panumbers):**
+- 2025: {gap_25.get('matched_panumbers', 0):,} panumbers matched, {fmt_m(gap_25.get('pa_granted', 0))} authorised → {fmt_m(gap_25.get('cl_approved', 0))} approved ({gap_25.get('vetting_reduction_pct', 0)}% clawed back)
+- 2026 YTD: {gap_26.get('matched_panumbers', 0):,} panumbers matched, {fmt_m(gap_26.get('pa_granted', 0))} authorised → {fmt_m(gap_26.get('cl_approved', 0))} approved ({gap_26.get('vetting_reduction_pct', 0)}% clawed back)
+
+**Claims Data (by encounter date):** Available from 2020
 - 2025: {cl_25.get('claim_count', 0):,} claims, {fmt_m(cl_25.get('approved', 0))} approved
 - 2026 YTD: {cl_26.get('claim_count', 0):,} claims, {fmt_m(cl_26.get('approved', 0))} approved
+
+**No-Auth (NI Auth) Claims:**
+- 2025: {fmt_m(noauth_25)} approved without PA
+- 2026 YTD: {fmt_m(noauth_26)} approved without PA
 
 ---
 # SECTION A — PA MONTHLY TRENDS (2025–2026)
@@ -453,6 +704,45 @@ Apply the same medical grouping — cluster ICD codes into clinical categories. 
 {json.dumps(data["claims_monthly"], indent=2)}
 
 ---
+# SECTION M — PA-TO-CLAIMS VETTING GAP (top 30 providers by PA volume, 2025–2026)
+
+For each provider: how much was authorised (PA granted) vs how much was actually paid (claims approved)?
+The difference is what the vetting/claims team clawed back. A high vetting_reduction_pct means strong claims control; a very low reduction may signal rubber-stamping.
+
+Overall summary by year:
+{json.dumps(data["pa_claims_gap_summary"], indent=2)}
+
+Top providers (ordered by PA authorised):
+{json.dumps(data["pa_claims_gap"], indent=2)}
+
+---
+# SECTION N — NO-AUTH (NI AUTH) CLAIMS — Spend Without Prior Authorisation
+
+These claims have no panumber — care was delivered without a prior authorisation gate.
+This is legitimate for certain service types but represents uncontrolled cost exposure.
+
+Monthly trend (by encounter date, 2022–2026):
+{json.dumps(data["noauth_monthly"], indent=2)}
+
+Top providers driving no-auth spend (2025–2026):
+{json.dumps(data["noauth_by_provider"], indent=2)}
+
+Top diagnoses in no-auth claims (2025–2026):
+{json.dumps(data["noauth_by_diagnosis"], indent=2)}
+
+---
+# SECTION O — SUBMISSION LAG (Outstanding Liability from Late-Submitted Claims)
+
+`lag_bucket` = gap between when the patient was seen (encounterdatefrom) and when the provider billed (datesubmitted).
+Late submissions mean Clearline carries undisclosed liability — 2025 encounters appearing in 2026 submissions inflate 2026 MLR.
+
+Lag distribution by encounter year and submission year:
+{json.dumps(data["submission_lag"], indent=2)}
+
+2025 encounters split by submission year (shows how much 2025 liability has spilled into 2026):
+{json.dumps(data["lag_2025_encounters"], indent=2)}
+
+---
 
 # YOUR TASK
 
@@ -500,6 +790,15 @@ Describe the profile of high utilisers. What diagnoses do they carry? What group
 
 ### 3g. Seasonality Patterns
 Identify clear seasonal patterns. Which months consistently have the highest utilisation? Use this to forecast the next 3 months.
+
+## 3h. PA-to-Claims Vetting Gap Analysis
+What proportion of authorised (PA granted) spend is actually paid (claims approved)? Which providers have the highest and lowest vetting reduction rates? Is Clearline's claims team being rigorous or lenient? Flag any providers where the PA amount is dramatically higher than what was ultimately approved — this may indicate over-authorisation, overbilling, or strong vetting.
+
+## 3i. No-Auth (NI Auth) Claims Analysis
+What is the scale and trend of spend that bypasses the PA gate entirely? Which diagnoses and providers dominate no-auth claims? Is no-auth spend growing faster than PA-authorised spend? Are any providers suspiciously concentrated in no-auth claims (potential abuse of no-auth pathways)? What proportion of total approved spend does no-auth represent?
+
+## 3j. Submission Lag & Outstanding Liability
+What is the typical lag between encounter date and submission date? How much 2025 liability is being submitted in 2026 — quantify the amount and proportion. What does this mean for Clearline's MLR? Are certain providers systematically late submitters? Flag any claims submitted 180+ days after the encounter as operationally abnormal and potentially fraudulent.
 
 ## 4. CROSS-CUTTING INSIGHTS (patterns humans would miss)
 Identify at least 5 non-obvious patterns, correlations, or anomalies from combining multiple data sections. Examples: a group appearing in both top PA and top claims, a provider with high PA but low claims, a diagnosis cluster spiking only in specific months, etc.
