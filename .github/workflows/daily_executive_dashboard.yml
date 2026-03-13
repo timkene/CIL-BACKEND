@@ -1,0 +1,26 @@
+name: Daily Executive Dashboard
+
+on:
+  schedule:
+    - cron: '0 23 * * *'   # 11 PM UTC = midnight WAT
+  workflow_dispatch:         # manual trigger from GitHub Actions tab
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install "duckdb==1.4.0" supabase python-dotenv
+
+      - name: Run dashboard batch
+        env:
+          MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+          SUPABASE_URL:     ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:     ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/daily_executive_dashboard.py
