@@ -40,9 +40,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DB_PATH = os.getenv(
-    "DUCKDB_PATH",
-    "/Users/kenechukwuchukwuka/Downloads/DLT/ai_driven_data.duckdb"
+# If MOTHERDUCK_TOKEN is set, connect to MotherDuck (production on Render).
+# Otherwise fall back to local DuckDB file (local dev).
+_MD_TOKEN = os.getenv("MOTHERDUCK_TOKEN")
+DB_PATH   = (
+    f"md:?motherduck_token={_MD_TOKEN}"
+    if _MD_TOKEN
+    else os.getenv("DUCKDB_PATH", "/Users/kenechukwuchukwuka/Downloads/DLT/ai_driven_data.duckdb")
 )
 SCHEMA = "AI DRIVEN DATA"
 
@@ -69,6 +73,9 @@ _introspection: Dict[str, Any] = {}
 
 
 def get_conn():
+    # MotherDuck doesn't support read_only=True
+    if _MD_TOKEN:
+        return duckdb.connect(DB_PATH)
     return duckdb.connect(DB_PATH, read_only=True)
 
 
