@@ -1,0 +1,30 @@
+name: Monthly AI Medical Report
+
+on:
+  schedule:
+    # Last day of every month at 11 PM UTC (midnight WAT)
+    # Runs on the 28th (covers all months); script logic determines report period
+    - cron: '0 23 28 * *'
+  workflow_dispatch:    # Manual trigger from GitHub Actions tab or "Run Now" button on Vercel
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30   # Claude analysis can take up to 3 minutes
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install "duckdb==1.4.0" supabase python-dotenv anthropic
+
+      - name: Run monthly AI report
+        env:
+          MOTHERDUCK_TOKEN:  ${{ secrets.MOTHERDUCK_TOKEN }}
+          SUPABASE_URL:      ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:      ${{ secrets.SUPABASE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/monthly_ai_report.py
