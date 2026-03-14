@@ -19,7 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install "duckdb==1.4.0" supabase python-dotenv anthropic
+        run: pip install "duckdb==1.4.0" supabase python-dotenv anthropic python-dateutil
 
       - name: Run monthly AI report
         env:
